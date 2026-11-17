@@ -16,3 +16,19 @@ desktop-state.json*
 !.env.example
 *.pfx
 *.p12
+
+# Private workspace material and build/diagnostic intermediates.
+.zcode/
+.openchamber/
+.local-archives/
+AGENTS.md
+docs/verification-assets/
+docs/verification.md
+*.log
+*.tmp
+*.bak
+*.dmp
+*.pdb
+*.key
+*.pem
+*.ppkg
