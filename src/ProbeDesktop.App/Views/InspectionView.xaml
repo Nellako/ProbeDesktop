@@ -4,7 +4,7 @@
              xmlns:views="clr-namespace:ProbeDesktop.App.Views"
              Style="{StaticResource PageRoot}">
     <UserControl.Resources>
-        <!-- 三种色调文本：配置状态 / 模型授权 / 本轮结果。ok 绿、warn 橙、bad 红，其余灰 -->
+        <!-- 色调文本：配置状态 / 模型授权 / 本轮结果。ok 绿、possible 蓝、warn 橙、bad 红，其余灰 -->
         <Style x:Key="NodeStatusText" TargetType="TextBlock" BasedOn="{StaticResource Hint}">
             <Style.Triggers>
                 <DataTrigger Binding="{Binding StatusTone}" Value="ok"><Setter Property="Foreground" Value="{StaticResource SuccessBrush}" /></DataTrigger>
@@ -40,10 +40,19 @@
             <Style.Triggers>
                 <DataTrigger Binding="{Binding ContextTone}" Value="ok">
                     <Setter Property="Background" Value="{StaticResource SuccessLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ContextTone}" Value="possible">
+                    <Setter Property="Background" Value="{StaticResource PossibleLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource PossibleBorderBrush}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding ContextTone}" Value="warn">
                     <Setter Property="Background" Value="{StaticResource WarningLightBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ContextTone}" Value="bad">
+                    <Setter Property="Background" Value="{StaticResource DangerLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource DangerBorderBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -53,7 +62,9 @@
             <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding ContextTone}" Value="ok"><Setter Property="Foreground" Value="{StaticResource SuccessBrush}" /></DataTrigger>
+                <DataTrigger Binding="{Binding ContextTone}" Value="possible"><Setter Property="Foreground" Value="{StaticResource PossibleBrush}" /></DataTrigger>
                 <DataTrigger Binding="{Binding ContextTone}" Value="warn"><Setter Property="Foreground" Value="{StaticResource WarningBrush}" /></DataTrigger>
+                <DataTrigger Binding="{Binding ContextTone}" Value="bad"><Setter Property="Foreground" Value="{StaticResource DangerBrush}" /></DataTrigger>
             </Style.Triggers>
         </Style>
 

@@ -46,7 +46,8 @@ public static class InspectionRetryTests
             Check.Equal(1, round.Succeeded + round.Failed + round.UnknownCount + round.PossibleSuccessCount, "target counted only once");
             Check.Equal(0, round.Skipped, "completed target not skipped");
             var final = InspectionRoundResults.FinalConnections(history, round.RoundId).Single();
-            Check.Equal(history.OrderByDescending(r => r.CompletedAt).First().RecordId, final.RecordId, "helper selects final not first failure");
+            // In this homogeneous/failed-then-green matrix, best equals the newest attempt.
+            Check.Equal(history.OrderByDescending(r => r.CompletedAt).First().RecordId, final.RecordId, "matrix representative is the best result (newest for equal ranks)");
             ConnectionTestResult[] differentTargets = [final, final with { KeyRevision = final.KeyRevision + 1 },
                 final with { BaseUrl = final.BaseUrl + "/other" }, final with { Protocol = ApiProtocol.AnthropicMessages },
                 final with { ProfileId = Guid.NewGuid() }, final with { ModelId = "other" },
@@ -54,7 +55,12 @@ public static class InspectionRetryTests
             Check.Equal(6, InspectionRoundResults.FinalConnections(differentTargets, round.RoundId).Count, "precise target identity and completion/round filters never merge another target");
             if (outcome.Contains("green")) Check.Equal(1, round.Succeeded, "green terminates retry chain");
             if (outcome == "possible") Check.Equal(1, round.PossibleSuccessCount, "possible remains separate");
-            if (outcome == "unknown") Check.Equal(1, round.UnknownCount, "unknown remains unknown");
+            Check.Equal(0, round.UnknownCount, "new rounds do not populate the legacy unknown counter");
+            if (outcome == "unknown")
+            {
+                Check.Equal(1, round.Failed, "raw unknown is counted as failed for new rounds");
+                Check.True(history.All(r => r.Stage == ConnectionTestStage.Unknown), "counting never rewrites each raw unknown attempt");
+            }
         }
     }
 
@@ -95,9 +101,16 @@ public static class InspectionRetryTests
             });
             InspectionRoundSummary round = await service.RunInspectionRoundAsync();
             Check.Equal(2, handler.Count, change + " stops subsequent attempts");
-            Check.Equal(1, round.PossibleSuccessCount + round.UnknownCount, "last actual response retained even if cancellation interrupted body read");
+            var history = await service.GetConnectionHistoryAsync();
+            Check.Equal(1, history.Count, "completed attempt stays in history");
+            Check.True(history[0].Stage is ConnectionTestStage.PossibleSuccess or ConnectionTestStage.Unknown,
+                "scope-change boundary either completes the empty response or cancels its body read");
+            Check.Equal(history[0].Stage == ConnectionTestStage.PossibleSuccess ? 1 : 0, round.PossibleSuccessCount,
+                "counter follows actual completion boundary, not an assumed cancellation time");
+            Check.Equal(history[0].Stage == ConnectionTestStage.Unknown ? 1 : 0, round.Failed,
+                "cancelled read counts failed while its raw Unknown stage stays intact");
+            Check.Equal(0, round.UnknownCount, "new cancellation summary does not populate legacy unknown counter");
             Check.Equal(0, round.Skipped, "no double count after scope change");
-            Check.Equal(1, (await service.GetConnectionHistoryAsync()).Count, "completed attempt stays in history");
         }
     }
 

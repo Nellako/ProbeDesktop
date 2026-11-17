@@ -24,16 +24,40 @@ public sealed record InspectionConsent(IReadOnlyList<InspectionTarget> Scope, in
     public int MaxAttempts { get; init; } = 1;
 }
 
-/// <summary>Shared round presentation rule: retain every attempt in history, display only the final completed attempt per exact target.</summary>
+/// <summary>Retain every attempt; represent each exact target by its best completed result in this round, newest on ties.</summary>
 public static class InspectionRoundResults
 {
     public const int MaxAttempts = 3;
 
+    /// <summary>Connection outcome priority only; marker checks do not change connection success. Raw Unknown remains a failure for presentation.</summary>
+    public static int OutcomeRank(ConnectionTestResult result) => result.Stage switch
+    {
+        ConnectionTestStage.ModelResponded => 3,
+        ConnectionTestStage.PossibleSuccess => 2,
+        ConnectionTestStage.Failed or ConnectionTestStage.Unknown => 1,
+        _ => result.ModelResponded ? 3 : 0
+    };
+
+    /// <summary>Callers supply attempts from one round and one exact target. Return the original record, including its own marker check.</summary>
+    public static ConnectionTestResult? BestCompleted(IEnumerable<ConnectionTestResult> attempts) => attempts
+        .Where(r => r.CompletedAt is not null)
+        .OrderByDescending(OutcomeRank).ThenByDescending(r => r.CompletedAt).ThenByDescending(r => r.StartedAt)
+        .FirstOrDefault();
+
+    // Choose the newest attempt/round first, then rank only its exact target. Never let an older round's success mask a new failure.
+    internal static ConnectionTestResult RepresentativeForLatest(IEnumerable<ConnectionTestResult> history, ConnectionTestResult latest) =>
+        latest.RoundId is { } roundId
+            ? BestCompleted(history.Where(r => r.RoundId == roundId && r.ProfileId == latest.ProfileId &&
+                r.ModelId == latest.ModelId && r.KeyRevision == latest.KeyRevision && r.BaseUrl == latest.BaseUrl &&
+                r.Protocol == latest.Protocol && r.Source == latest.Source && r.Stage != ConnectionTestStage.LocalValidationPassed)) ?? latest
+            : latest;
+
+    /// <summary>Compatibility name: the final representative is the best completed attempt, not necessarily the last attempt.</summary>
     public static IReadOnlyList<ConnectionTestResult> FinalConnections(IEnumerable<ConnectionTestResult> history, Guid roundId) =>
         history.Where(r => r.RoundId == roundId && r.CompletedAt is not null &&
                 r.Source is ConnectionRecordSource.Automatic or ConnectionRecordSource.RoundManual)
             .GroupBy(r => (r.ProfileId, r.ModelId, r.KeyRevision, r.BaseUrl, r.Protocol))
-            .Select(g => g.OrderByDescending(r => r.CompletedAt).ThenByDescending(r => r.StartedAt).First())
+            .Select(g => BestCompleted(g)!)
             .OrderByDescending(r => r.CompletedAt).ToArray();
 }
 public sealed record InspectionRoundSummary
@@ -46,6 +70,7 @@ public sealed record InspectionRoundSummary
     public int Succeeded { get; init; }
     public int Failed { get; init; }
     public int PossibleSuccessCount { get; init; }
+    /// <summary>Legacy persisted counter. New rounds include unconfirmed/Unknown outcomes in Failed.</summary>
     public int UnknownCount { get; init; }
     public int Skipped { get; init; }
     public bool Cancelled { get; init; }
@@ -69,6 +94,7 @@ public interface IInspectionIntervalService
 public sealed record LatestModelResults(ConnectionTestResult? Connection, ProbeRecord? Probe);
 public interface ILatestResultsService
 {
+    /// <summary>Latest completed connection attempt's round/target, represented by its best completed attempt; standalone calls remain independent. Probe ordering is unchanged.</summary>
     Task<LatestModelResults> GetLatestResultsAsync(Guid profileId, string modelId, CancellationToken cancellationToken = default);
 }
 

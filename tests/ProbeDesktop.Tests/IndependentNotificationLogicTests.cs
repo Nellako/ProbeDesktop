@@ -89,7 +89,7 @@ public static class IndependentNotificationLogicTests
     }
 
     // N16 -------------------------------------------------------------------
-    // Connection classes map to four disjoint outcomes; only a real model response may clear an earlier problem.
+    // Connection display maps raw Unknown to failure; only a real model response may clear an earlier problem.
     public static async Task N16_ConnectionObservationClasses()
     {
         await Task.Yield();
@@ -112,9 +112,11 @@ public static class IndependentNotificationLogicTests
         Check.Equal(NotificationObservationState.Problem, possible.State, "possible success is reported, not silently healthy");
         Check.Equal(ProblemObservations.PossibleSuccess, possible.Problem, "possible success has its own code");
 
-        var unknown = ProblemObservations.ClassifyConnection(Connection(ConnectionTestStage.Unknown));
-        Check.Equal(NotificationObservationState.Problem, unknown.State, "unknown result is a stable problem");
-        Check.Equal(ProblemObservations.UnknownResult, unknown.Problem, "unknown result has its own code");
+        var unknownRecord = Connection(ConnectionTestStage.Unknown, code: "Network");
+        var unknown = ProblemObservations.ClassifyConnection(unknownRecord);
+        Check.Equal(NotificationObservationState.Problem, unknown.State, "raw unknown is a failure, never a recovery");
+        Check.Equal("failed-Network", unknown.Problem, "raw unknown uses the same safe failed-code mapping as other failures");
+        Check.Equal(ConnectionTestStage.Unknown, unknownRecord.Stage, "notification classification never rewrites original stage");
 
         foreach (ConnectionTestStage middle in new[] { ConnectionTestStage.LocalValidationPassed, ConnectionTestStage.ApiReached })
         {
@@ -328,7 +330,7 @@ public static class IndependentNotificationLogicTests
     private static readonly DateTimeOffset T0 = new(2026, 11, 1, 8, 0, 0, TimeSpan.Zero);
 
     // N20 -------------------------------------------------------------------
-    // Connection retries: up to 3 attempts per exact target in one round; notifications use only the final completed attempt.
+    // Connection retries: notifications use the best completed attempt in this round, not the last one.
     public static async Task N20_RetryFinalAttemptNotifications()
     {
         await Task.Yield();
@@ -352,14 +354,14 @@ public static class IndependentNotificationLogicTests
         Check.Equal(1, oldestFirst.Count, "three attempts of one target produce one observation");
         Check.Equal(NotificationObservationState.Healthy, oldestFirst[0].Observation.State, "third attempt success is healthy");
 
-        // Exhausted: only the last attempt's own classification is reported; earlier codes never leak.
+        // A later failure must not hide a possible response from this same round.
         var exhausted = ProblemObservations.FromConnectionRound(round, [
             Connection(ConnectionTestStage.Failed, http: 500, roundId: round, completedAt: T0.AddSeconds(10)),
             Connection(ConnectionTestStage.PossibleSuccess, roundId: round, completedAt: T0.AddSeconds(20)),
             Connection(ConnectionTestStage.Failed, http: 503, roundId: round, completedAt: T0.AddSeconds(30)),
         ], InspectionSnapshotOf());
         Check.Equal(1, exhausted.Count, "exhausted retries produce one observation");
-        Check.Equal("http-503", exhausted[0].Observation.ProblemType, "only the final failure is reported");
+        Check.Equal(ProblemObservations.PossibleSuccess, exhausted[0].Observation.ProblemType, "possible outranks a later failure in the same round");
 
         // The original classification of the last attempt is preserved, not forced into a failure.
         var possible = ProblemObservations.FromConnectionRound(round, [
@@ -371,7 +373,7 @@ public static class IndependentNotificationLogicTests
             Connection(ConnectionTestStage.Failed, http: 500, roundId: round, completedAt: T0.AddSeconds(10)),
             Connection(ConnectionTestStage.Unknown, roundId: round, completedAt: T0.AddSeconds(20)),
         ], InspectionSnapshotOf());
-        Check.Equal(ProblemObservations.UnknownResult, unknown[0].Observation.ProblemType, "final unknown stays unknown");
+        Check.Equal("failed-error", unknown[0].Observation.ProblemType, "raw unknown is notified as failure with a safe fallback code");
 
         // 401 stops retries: a single final record is reported with its own code.
         var auth = ProblemObservations.FromConnectionRound(round, [
@@ -414,7 +416,7 @@ public static class IndependentNotificationLogicTests
     }
 
     // N21 -------------------------------------------------------------------
-    // Latest-round display: one row per exact target = its last attempt; full history is untouched.
+    // Latest-round display: one row per exact target = its best completed attempt; full history is untouched.
     public static async Task N21_RoundDisplayShowsFinalAttemptPerTarget()
     {
         await Task.Yield();
@@ -442,13 +444,15 @@ public static class IndependentNotificationLogicTests
         ], round);
         Check.Equal("", ConnectionRoundDisplay.AttemptNote(single[0]), "a single attempt needs no note");
 
-        // A running retry is shown as running, never replaced by the earlier failure.
+        // While retrying, keep the best completed result and independently disclose the running attempt.
         var running = ConnectionRoundDisplay.LatestPerTarget([
             Connection(ConnectionTestStage.Failed, http: 503, roundId: round, completedAt: T0.AddSeconds(10)),
             Connection(ConnectionTestStage.ApiReached, roundId: round, inFlight: true, startedAt: T0.AddSeconds(20)),
         ], round);
         Check.Equal(1, running.Count, "one row for a retrying target");
-        Check.True(running[0].Record.CompletedAt is null, "the unfinished latest attempt is the one displayed");
+        Check.Equal(ConnectionTestStage.Failed, running[0].Record.Stage, "the completed result is retained while retrying");
+        Check.NotNull(running[0].Record.CompletedAt, "unfinished retry does not erase completed evidence");
+        Check.True(running[0].IsAttemptInProgress, "running retry is disclosed independently");
         Check.Equal(2, running[0].Attempts, "running retry counts as attempt two");
         Check.Contains(ConnectionRoundDisplay.AttemptNote(running[0]), "第 2 次尝试进行中", "running retry note");
 
@@ -482,7 +486,8 @@ public static class IndependentNotificationLogicTests
         Check.Contains(text, "额外计费", "warns that repeating after an unknown result may bill again");
         Check.Contains(text, "401/403", "401/403 exception is disclosed");
         Check.Contains(text, "429", "429 exception is disclosed");
-        Check.Contains(text, "最后一次尝试", "states that statistics and notifications use the final attempt");
+        Check.True(text.Contains("最高状态", StringComparison.Ordinal) || text.Contains("最佳", StringComparison.Ordinal),
+            "states that statistics and notifications use the best result in this round");
         Check.Contains(text, "手动单次连接测试不自动重试", "manual single test is explicitly excluded");
         Check.Contains(text, "身份识别巡检另行确认且不自动重试", "identity inspection is explicitly excluded");
         Check.Contains(text, "POST https://relay.example.com/v1/chat/completions", "the exact receiving endpoint is still listed");

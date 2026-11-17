@@ -31,6 +31,17 @@ public static class Program
 
         var tests = new List<(string Id, string Name, Func<Task> Body)>
         {
+            ("V9201", "Verifier: best result beats later failure; equal rank uses newest", BestRoundResultVerificationTests.BestBeatsLaterFailureAndSameRankUsesNewest),
+            ("V9202", "Verifier: round, model, profile and configuration isolation", BestRoundResultVerificationTests.ExactTargetAndRoundIsolation),
+            ("V9203", "Verifier: real round best counters, three-attempt ceiling, history and deletion", BestRoundResultVerificationTests.RealRoundsCountersHistoryDeletionAndCeiling),
+            ("V9204", "Verifier: persisted best result and new-round boundary", BestRoundResultVerificationTests.PersistedBestAndNewRoundBoundary),
+            ("V9205", "Verifier: marker labels and green/blue/red display tokens", BestRoundResultVerificationTests.ContextDisplayContract),
+            ("V9206", "Verifier: best completed result survives cancellation boundary", BestRoundResultVerificationTests.BestSurvivesCancellationBoundary),
+            ("V9207", "Verifier: running retry preserves whole best record and its own marker", BestRoundResultVerificationTests.InProgressPreservesBestWholeRecord),
+            ("V9208", "Verifier: legacy summary uses round best without erasing partial/deleted history totals", BestRoundResultVerificationTests.LegacyRoundSummaryUsesBestWithoutErasingPartialTotals),
+            ("V9209", "Verifier: real marker XAML triggers use green/blue/red brush resources", ColorBindingVerificationTests.MarkerStylesUseRealGreenBlueRedBrushes),
+            ("V9210", "Verifier: real result XAML triggers use green/blue/red brush resources", ColorBindingVerificationTests.ConnectionStylesUseRealGreenBlueRedBrushes),
+            ("V9211", "Verifier: color wiring guard rejects old warn-only styles and orange mutations", ColorBindingVerificationTests.GuardRejectsOldWarnOnlyAndWrongBrushMutations),
             ("CX01", "Reading markers across three protocols, JSON/SSE and restart", ContextCheckTests.ProtocolsAndPersistence),
             ("CX02", "Legacy reading checks remain untested and migration fields stay strict", ContextCheckTests.LegacyContract),
             ("VCX01", "Verifier: Responses JSON cannot join separate output messages", ContextBoundaryVerificationTests.ResponsesJsonOutputIsolation),
@@ -184,13 +195,13 @@ public static class Program
             ("ID14", "Identity: legacy capability state migrates without automation or data loss", IdentityInspectionTests.V14_LegacyCapabilityStateMigratesWithoutAutomation),
             ("ID15", "Identity: RecordResult after End never resurrects the round", IdentityInspectionTests.V15_RecordAfterEndDoesNotResurrectRound),
             ("N15", "Notification logic: stable non-sensitive problem codes", IndependentNotificationLogicTests.N15_SafeProblemCodes),
-            ("N16", "Notification logic: connection four-way classes, possible/unknown never recovery", IndependentNotificationLogicTests.N16_ConnectionObservationClasses),
+            ("N16", "Notification logic: three-way display, raw unknown retained, never false recovery", IndependentNotificationLogicTests.N16_ConnectionObservationClasses),
             ("N17", "Notification logic: identity verdict mapping, warnings/mismatch/spoof", IndependentNotificationLogicTests.N17_IdentityObservationClasses),
             ("N18", "Notification logic: automatic identity source/trigger filtering", IndependentNotificationLogicTests.N18_AutomaticIdentityFiltering),
             ("N19", "Notification logic: round mapping filters, compose/title/describe", IndependentNotificationLogicTests.N19_RoundMappingAndComposing),
-            ("N20", "Connection retry: notifications use only the final attempt per exact target", IndependentNotificationLogicTests.N20_RetryFinalAttemptNotifications),
-            ("N21", "Connection retry: latest-round display shows final attempt per target, history kept", IndependentNotificationLogicTests.N21_RoundDisplayShowsFinalAttemptPerTarget),
-            ("N22", "Connection retry: confirmation text discloses 3 attempts, 3x cost, exceptions", IndependentNotificationLogicTests.N22_ScopeTextDisclosesRetries),
+            ("N20", "Connection retry: notifications use best result per exact target in this round", IndependentNotificationLogicTests.N20_RetryFinalAttemptNotifications),
+            ("N21", "Connection retry: latest-round display uses best result per target, history kept", IndependentNotificationLogicTests.N21_RoundDisplayShowsFinalAttemptPerTarget),
+            ("N22", "Connection retry: confirmation text discloses 3 attempts, 3x request ceiling, exceptions", IndependentNotificationLogicTests.N22_ScopeTextDisclosesRetries),
         };
         return await TestRunner.RunAllAsync(tests).ConfigureAwait(false);
     }

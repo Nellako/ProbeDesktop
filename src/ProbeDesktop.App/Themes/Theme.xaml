@@ -17,8 +17,8 @@
     <Color x:Key="WarningColor">#8A4B00</Color>
     <Color x:Key="SuccessColor">#17663A</Color>
     <Color x:Key="FocusColor">#2563EB</Color>
-    <!-- “成功（可能）”专用提示色：青蓝，区别于成功绿、警告琥珀与主色蓝；对白底对比度约 6:1。 -->
-    <Color x:Key="PossibleColor">#0F6A7A</Color>
+    <!-- 连接结果“成功（可能）”与标记“不匹配”统一使用蓝色。 -->
+    <Color x:Key="PossibleColor">#2563EB</Color>
 
     <SolidColorBrush x:Key="PrimaryBrush" Color="{StaticResource PrimaryColor}" />
     <SolidColorBrush x:Key="PrimaryHoverBrush" Color="{StaticResource PrimaryHoverColor}" />
@@ -44,9 +44,10 @@
     <SolidColorBrush x:Key="WarningLightBrush" Color="#FFF8EB" />
     <SolidColorBrush x:Key="WarningBorderBrush" Color="#F3D9A4" />
     <SolidColorBrush x:Key="SuccessLightBrush" Color="#ECFDF3" />
+    <SolidColorBrush x:Key="SuccessBorderBrush" Color="#ABEFC6" />
     <SolidColorBrush x:Key="PossibleBrush" Color="{StaticResource PossibleColor}" />
-    <SolidColorBrush x:Key="PossibleLightBrush" Color="#E8F6F8" />
-    <SolidColorBrush x:Key="PossibleBorderBrush" Color="#A9D8DF" />
+    <SolidColorBrush x:Key="PossibleLightBrush" Color="#EEF4FF" />
+    <SolidColorBrush x:Key="PossibleBorderBrush" Color="#C7D7FB" />
     <SolidColorBrush x:Key="DisabledBrush" Color="#F1F5F9" />
     <SolidColorBrush x:Key="DisabledTextBrush" Color="#7A8699" />
     <!-- 兼容旧键 -->

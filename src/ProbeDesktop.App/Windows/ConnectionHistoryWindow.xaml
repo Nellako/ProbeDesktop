@@ -15,19 +15,25 @@
             <Setter Property="Padding" Value="8,2" />
             <Setter Property="HorizontalAlignment" Value="Left" />
             <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Background" Value="{StaticResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding Converter={x:Static conv:ConnectionToneConverter.Instance}}" Value="ok">
                     <Setter Property="Background" Value="{StaticResource SuccessLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding Converter={x:Static conv:ConnectionToneConverter.Instance}}" Value="possible">
                     <Setter Property="Background" Value="{StaticResource PossibleLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource PossibleBorderBrush}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding Converter={x:Static conv:ConnectionToneConverter.Instance}}" Value="bad">
                     <Setter Property="Background" Value="{StaticResource DangerLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource DangerBorderBrush}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding Converter={x:Static conv:ConnectionToneConverter.Instance}}" Value="warn">
                     <Setter Property="Background" Value="{StaticResource WarningLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -37,15 +43,19 @@
             <Style.Triggers>
                 <DataTrigger Binding="{Binding Converter={x:Static conv:ConnectionToneConverter.Instance}}" Value="ok">
                     <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding Converter={x:Static conv:ConnectionToneConverter.Instance}}" Value="possible">
                     <Setter Property="Foreground" Value="{StaticResource PossibleBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding Converter={x:Static conv:ConnectionToneConverter.Instance}}" Value="bad">
                     <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding Converter={x:Static conv:ConnectionToneConverter.Instance}}" Value="warn">
                     <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -60,10 +70,19 @@
             <Style.Triggers>
                 <DataTrigger Binding="{Binding ContextCheck, Converter={x:Static conv:ConnectionContextToneConverter.Instance}}" Value="ok">
                     <Setter Property="Background" Value="{StaticResource SuccessLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ContextCheck, Converter={x:Static conv:ConnectionContextToneConverter.Instance}}" Value="possible">
+                    <Setter Property="Background" Value="{StaticResource PossibleLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource PossibleBorderBrush}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding ContextCheck, Converter={x:Static conv:ConnectionContextToneConverter.Instance}}" Value="warn">
                     <Setter Property="Background" Value="{StaticResource WarningLightBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ContextCheck, Converter={x:Static conv:ConnectionContextToneConverter.Instance}}" Value="bad">
+                    <Setter Property="Background" Value="{StaticResource DangerLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource DangerBorderBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -75,8 +94,16 @@
                     <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
                     <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
+                <DataTrigger Binding="{Binding ContextCheck, Converter={x:Static conv:ConnectionContextToneConverter.Instance}}" Value="possible">
+                    <Setter Property="Foreground" Value="{StaticResource PossibleBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
                 <DataTrigger Binding="{Binding ContextCheck, Converter={x:Static conv:ConnectionContextToneConverter.Instance}}" Value="warn">
                     <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ContextCheck, Converter={x:Static conv:ConnectionContextToneConverter.Instance}}" Value="bad">
+                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
                     <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
             </Style.Triggers>
@@ -131,7 +158,6 @@
                             <ComboBoxItem Content="成功" Tag="成功" />
                             <ComboBoxItem Content="成功（可能）" Tag="成功（可能）" />
                             <ComboBoxItem Content="失败" Tag="失败" />
-                            <ComboBoxItem Content="结果未知" Tag="结果未知" />
                             <ComboBoxItem Content="本地检查通过（未发送）" Tag="本地检查通过" />
                             <ComboBoxItem Content="API 可达（未确认模型）" Tag="API 可达" />
                         </ComboBox>

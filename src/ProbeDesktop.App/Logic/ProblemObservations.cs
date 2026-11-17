@@ -9,10 +9,10 @@ public sealed record ObservedItem(NotificationObservation Observation, string La
 /// 把自动结果转换成通知观察（纯逻辑，只依赖 Core 类型）。规则：
 /// - 只产生自动观察（Automatic=true）；调用方只在自动结果后使用，手动运行不通知；
 /// - 问题类型只用稳定的非敏感代码（字母、数字、_、-），绝不使用响应文本；
-/// - 只有真正成功才是 Healthy（可清除旧异常）。连接“成功（可能）”和“结果未知”是稳定问题代码，会通知，但不算恢复；
+/// - 只有真正成功才是 Healthy（可清除旧异常）。连接“成功（可能）”与“失败”（含底层 Unknown）均作为问题代码通知，不算恢复；
 /// - 完成的鉴别只要报告带警示项（Warnings 非空）至少是问题 identity-warning；不一致/疑似伪装优先于警示；
 /// - 连接只观察自动轮次产生的记录（Source == Automatic），手动或“立即巡检”记录不产生观察；
-///   同一轮内同一精确目标的多次尝试只取最后一次已完成结果，中间失败不通知；
+///   同一轮内同一精确目标的多次尝试取本轮已完成尝试中的最高状态（成功 ＞ 成功（可能）＞ 失败，同级取最新），中间失败不掩盖同轮更优结果；
 /// - 仍在等待的结果、采集基线中、其他无法判定、跳过是 Unknown：既不通知也不清除已记录的问题；
 /// - 目标取自记录或快照自带的精确字段（配置、凭据修订、地址、协议、模型），Core 再与当前配置核对，不一致的旧目标不会挂到新配置上；
 /// - 身份类只观察身份识别巡检的定时记录（Source == IdentityInspection 且触发类型为 Automatic），手动单次、手动一轮和旧版“能力自动”历史不产生观察。
@@ -49,8 +49,6 @@ public static class ProblemObservations
                 return (NotificationObservationState.Problem, problem);
             case LatestResultPicker.ConnectionOutcome.PossibleSuccess:
                 return (NotificationObservationState.Problem, PossibleSuccess);
-            case LatestResultPicker.ConnectionOutcome.Unknown:
-                return (NotificationObservationState.Problem, UnknownResult);
             default:
                 return (NotificationObservationState.Unknown, null);
         }
@@ -120,7 +118,7 @@ public static class ProblemObservations
     /// <summary>
     /// 连接巡检一轮的观察。只处理自动轮次产生的记录（Source == Automatic），手动或“立即巡检”记录不产生观察。
     /// 每个目标（配置、凭据修订、Base URL、协议、模型 ID 精确一致）在本轮内可能有最多 3 次尝试，
-    /// 只取最后一次已完成的结果：先失败后成功不通知（最终为 Healthy，可清除旧异常），耗尽后仍非绿色只按最终分类通知。
+    /// 取本轮已完成尝试中的最高状态（同级取最新）：本轮只要有成功即为 Healthy（可清除旧异常），耗尽后仍非绿色只按本轮最好结果通知。
     /// 目标取自刚读取的巡检快照；凭据修订、协议或 Base URL 任一不精确一致的记录跳过，避免挂到新目标上。
     /// </summary>
     public static IReadOnlyList<ObservedItem> FromConnectionRound(Guid roundId, IEnumerable<ConnectionTestResult> history, InspectionSnapshot snapshot)
@@ -190,7 +188,7 @@ public static class ProblemObservations
             case PossibleSuccess:
                 return "成功（可能），没有确认到有效的模型响应";
             case UnknownResult:
-                return category == NotificationCategory.Identity ? "鉴别结果未知：查询已暂停或被限流，或结果不完整；远端任务不视为已取消" : "结果未知";
+                return category == NotificationCategory.Identity ? "鉴别结果未知：查询已暂停或被限流，或结果不完整；远端任务不视为已取消" : "连接失败";
             case "mismatch":
                 return "鉴别结果与目标模型不一致";
             case "spoof-suspected":

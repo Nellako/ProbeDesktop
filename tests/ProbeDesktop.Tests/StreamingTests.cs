@@ -124,14 +124,19 @@ public static class StreamingTests
             CheckCounts(progress.Values.Last());
             Check.Equal(4, progress.Values.Last().Succeeded + progress.Values.Last().Failed + progress.Values.Last().PossibleSuccessCount + progress.Values.Last().UnknownCount, "independent accounted progress");
             Check.Equal(11, h.Count, "one fetch plus ten attempts; four final targets");
+            var history = await service.GetConnectionHistoryAsync();
+            Check.Equal(3, history.Count(r => r.ModelId == "d" && r.Stage == ConnectionTestStage.Unknown),
+                "all truncated attempt stages remain raw Unknown despite failed summary classification");
         }
         using var reload = new DesktopService(dir.Path, Fixtures.Client(new FakeHttpHandler()), new ReversibleTestProtector());
         CheckCounts((await reload.GetInspectionSnapshotAsync()).LatestRound!);
+        Check.Equal(3, (await reload.GetConnectionHistoryAsync()).Count(r => r.ModelId == "d" && r.Stage == ConnectionTestStage.Unknown),
+            "raw Unknown attempts survive restart without stage migration");
     }
     private static void CheckCounts(InspectionRoundSummary round)
     {
-        Check.Equal(1, round.Succeeded, "success count"); Check.Equal(1, round.Failed, "failed count");
-        Check.Equal(1, round.PossibleSuccessCount, "possible count"); Check.Equal(1, round.UnknownCount, "unknown count");
+        Check.Equal(1, round.Succeeded, "success count"); Check.Equal(2, round.Failed, "failed includes unknown target");
+        Check.Equal(1, round.PossibleSuccessCount, "possible count"); Check.Equal(0, round.UnknownCount, "legacy unknown counter remains zero for new rounds");
     }
     private sealed class InlineProgress : IProgress<InspectionRoundSummary>
     {

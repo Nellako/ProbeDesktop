@@ -9,7 +9,7 @@ using ProbeDesktop.Core;
 
 namespace ProbeDesktop.App.ViewModels;
 
-/// <summary>最新一轮里某个模型的结果行。Tone：none / ok / possible / warn / bad；ContextTone：none / ok / warn。</summary>
+/// <summary>最新一轮里某个模型的结果行。Tone：none / ok / possible / bad；ContextTone：none / ok / possible / bad。</summary>
 public sealed record RoundResultRow(
     string ProfileName,
     string ModelId,
@@ -249,12 +249,13 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
     public string RoundCountsText => _round is not { } r ? "" : FormatCounts(r);
 
     /// <summary>
-    /// 成功、成功（可能）、失败、结果未知、跳过分别独立计数，互不合并。
+    /// 连接巡检展示统计统一为三类终态（成功、成功（可能）、失败）加跳过；历史遗留的 UnknownCount 合并计入失败。
     /// 总数大于各项之和时（进行中、被取消或中断）单列“未处理”，不把它们算作成功。
     /// </summary>
     internal static string FormatCounts(InspectionRoundSummary r)
     {
-        var text = $"共 {r.Total} 项：成功 {r.Succeeded}，成功（可能） {r.PossibleSuccessCount}，失败 {r.Failed}，结果未知 {r.UnknownCount}，跳过 {r.Skipped}";
+        var failed = r.Failed + r.UnknownCount;
+        var text = $"共 {r.Total} 项：成功 {r.Succeeded}，成功（可能） {r.PossibleSuccessCount}，失败 {failed}，跳过 {r.Skipped}";
         var pending = r.Total - FinishedCount(r);
         return pending > 0 ? text + $"，未处理 {pending}" : text;
     }

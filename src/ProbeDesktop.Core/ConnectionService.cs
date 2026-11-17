@@ -116,7 +116,7 @@ public sealed partial class DesktopService
             RelayProfile profile = FindProfile(state, profileId);
             return state.Vault.ConnectionResults.TryGetValue(profileId, out ConnectionTestResult? result) &&
                 result.Protocol == profile.Protocol && result.BaseUrl == profile.BaseUrl && result.KeyRevision == profile.KeyRevision
-                ? SanitizeConnection(result, new SensitiveText(state.Vault.KnownSecrets)) : null;
+                ? SanitizeConnection(InspectionRoundResults.RepresentativeForLatest(state.Vault.ConnectionHistory, result), new SensitiveText(state.Vault.KnownSecrets)) : null;
         }
         finally { _store.Gate.Release(); }
     }

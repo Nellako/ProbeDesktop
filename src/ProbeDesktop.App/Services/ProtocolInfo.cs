@@ -45,7 +45,7 @@ public static class ProtocolInfo
         ConnectionContextCheck.Passed => "通过",
         ConnectionContextCheck.Mismatch => "不匹配",
         ConnectionContextCheck.Inconclusive => "无法判断",
-        _ => "未校验",
+        _ => "未检验",
     };
 
     public static string ContextBadgeText(ConnectionContextCheck check) => $"标记：{ContextLabel(check)}";
@@ -53,8 +53,8 @@ public static class ProtocolInfo
     public static string ContextTone(ConnectionContextCheck check) => check switch
     {
         ConnectionContextCheck.Passed => "ok",
-        ConnectionContextCheck.Mismatch or ConnectionContextCheck.Inconclusive => "warn",
-        _ => "none",
+        ConnectionContextCheck.Mismatch => "possible",
+        _ => "bad",
     };
 
     public static string ContextNote(ConnectionContextCheck check) => check switch
@@ -62,7 +62,7 @@ public static class ProtocolInfo
         ConnectionContextCheck.Passed => "本次已按顺序和格式返回首、中、尾三个标记；仅说明本次读回标记，不证明模型真实身份或能力，也不是256k上下文压力测试。",
         ConnectionContextCheck.Mismatch => "已收到模型响应（连接成功），但没有按要求格式返回三个标记；不等于断连或降智，不因此新增重试或问题通知，也不证明真实身份或能力。",
         ConnectionContextCheck.Inconclusive => "响应未完整确认、超限或存在多输出歧义，无法判断标记读取情况；不等于断连或降智。",
-        _ => "旧记录无标记校验证据，显示为未校验，不对旧结果追溯补判。",
+        _ => "旧记录无标记校验证据，显示为未检验，不对旧结果追溯补判。",
     };
 
     /// <summary>

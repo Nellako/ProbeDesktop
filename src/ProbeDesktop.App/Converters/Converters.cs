@@ -64,7 +64,7 @@ public sealed class LocalTimeConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
-/// <summary>整条 ConnectionTestResult → 结果文字（成功 / 成功（可能）/ 失败 / 结果未知，中间阶段沿用阶段名）。</summary>
+/// <summary>整条 ConnectionTestResult → 结果文字（成功 / 成功（可能）/ 失败，中间阶段沿用阶段名）。</summary>
 public sealed class ConnectionResultTextConverter : IValueConverter
 {
     public static readonly ConnectionResultTextConverter Instance = new();
@@ -76,7 +76,7 @@ public sealed class ConnectionResultTextConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
-/// <summary>整条 ConnectionTestResult → 色调键：ok / possible / bad / warn / none。</summary>
+/// <summary>整条 ConnectionTestResult → 色调键：ok / possible / bad / none。</summary>
 public sealed class ConnectionToneConverter : IValueConverter
 {
     public static readonly ConnectionToneConverter Instance = new();
@@ -90,15 +90,18 @@ public sealed class ConnectionToneConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
-/// <summary>ConnectionContextCheck → 色调键：ok / warn / none。</summary>
+/// <summary>ConnectionContextCheck（或整条结果）→ 色调键：ok / possible / bad；无记录或未完成进行中返回 none。</summary>
 public sealed class ConnectionContextToneConverter : IValueConverter
 {
     public static readonly ConnectionContextToneConverter Instance = new();
 
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => value is ConnectionContextCheck c
-            ? ProbeDesktop.App.Services.ProtocolInfo.ContextTone(c)
-            : "none";
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
+    {
+        ConnectionTestResult { CompletedAt: null } => "none",
+        ConnectionTestResult r => ProbeDesktop.App.Services.ProtocolInfo.ContextTone(r.ContextCheck),
+        ConnectionContextCheck c => ProbeDesktop.App.Services.ProtocolInfo.ContextTone(c),
+        _ => "none",
+    };
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotSupportedException();

@@ -94,7 +94,9 @@ public sealed partial class DesktopService
             SensitiveText sanitizer = new(state.Vault.KnownSecrets);
             ConnectionTestResult? connection = state.Vault.ConnectionHistory
                 .Where(r => r.ProfileId == profileId && r.ModelId == modelId && r.CompletedAt is not null && r.Stage != ConnectionTestStage.LocalValidationPassed)
-                .OrderByDescending(r => r.CompletedAt).FirstOrDefault();
+                .OrderByDescending(r => r.CompletedAt).ThenByDescending(r => r.StartedAt).FirstOrDefault();
+            if (connection is not null)
+                connection = InspectionRoundResults.RepresentativeForLatest(state.Vault.ConnectionHistory, connection);
             ProbeRecord? probe = state.Vault.History.OrderByDescending(r => r.CreatedAt)
                 .Where(r => r.ProfileId == profileId && r.ModelId == modelId && IsTerminal(r.State) && r.CompletedAt is not null)
                 .OrderByDescending(r => r.CompletedAt).FirstOrDefault();

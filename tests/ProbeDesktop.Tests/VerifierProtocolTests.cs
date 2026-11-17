@@ -165,7 +165,7 @@ public static class VerifierProtocolTests
     }
 
     // V03 -------------------------------------------------------------------
-    // 计数四类 + 跳过互不合并；持久化后重新读取保持一致。
+    // 新轮次三类统计（Unknown 归失败）+ 跳过；原始 Unknown 和持久化保持兼容。
     public static async Task V03_RoundCounters()
     {
         using var dir = new TempDir();
@@ -180,26 +180,43 @@ public static class VerifierProtocolTests
             await service.SaveInspectionSettingsAsync(new() { Enabled = false },
                 new(snapshot.Targets.Select(t => t.Target).ToArray(), 30, DateTimeOffset.UtcNow) { MaxAttempts = 3 });
 
-            handler.EnqueueRaw(HttpStatusCode.OK, "application/json", "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"OK\"}}]}");
-            for (int i = 0; i < 3; i++) handler.EnqueueRaw(HttpStatusCode.OK, "application/json", "{\"foo\":\"bar\"}");
-            for (int i = 0; i < 3; i++) handler.EnqueueRaw(HttpStatusCode.OK, "application/json", "{\"error\":{\"message\":\"quota\"}}");
-            for (int i = 0; i < 3; i++) handler.EnqueueRaw(HttpStatusCode.OK, "text/event-stream", "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n");
+            // Model cache order is not a public contract. Script by actual target, never by assumed queue order.
+            for (int i = 0; i < 10; i++) handler.Enqueue(request =>
+            {
+                using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                string model = body.RootElement.GetProperty("model").GetString()!;
+                string payload = model switch
+                {
+                    "ok" => "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"OK\"}}]}",
+                    "maybe" => "{\"foo\":\"bar\"}",
+                    "bad" => "{\"error\":{\"message\":\"quota\"}}",
+                    "lost" => "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n",
+                    _ => throw new TestFailure("unexpected model in counter test: " + model),
+                };
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(payload, System.Text.Encoding.UTF8,
+                        model == "lost" ? "text/event-stream" : "application/json"),
+                };
+            });
 
             InspectionRoundSummary round = await service.RunInspectionRoundAsync(InspectionTrigger.Manual);
             Check.Equal(4, round.Total, "total models");
             Check.Equal(1, round.Succeeded, "succeeded counted once");
             Check.Equal(1, round.PossibleSuccessCount, "possible success counted once");
-            Check.Equal(1, round.Failed, "failed counted once");
-            Check.Equal(1, round.UnknownCount, "unknown counted once");
+            Check.Equal(2, round.Failed, "failed and raw-unknown targets each counted once as failed");
+            Check.Equal(0, round.UnknownCount, "new rounds keep legacy unknown counter zero");
             Check.Equal(0, round.Skipped, "nothing skipped");
             Check.Equal(4, round.Succeeded + round.PossibleSuccessCount + round.Failed + round.UnknownCount,
-                "four categories are disjoint and complete");
+                "three display categories are disjoint and complete");
             Check.NotNull(round.CompletedAt, "round completed");
             Check.Equal(11, handler.Count, "one model list plus ten bounded attempts");
 
             // 已完成的连接记录不应停留在中间阶段（结论：SendConnection 的最终返回值不会是中间阶段）。
             IReadOnlyList<ConnectionTestResult> records = await service.GetConnectionHistoryAsync();
             Check.Equal(10, records.Count, "each attempt gets a real record");
+            Check.Equal(3, records.Count(r => r.ModelId == "lost" && r.Stage == ConnectionTestStage.Unknown),
+                "all raw unknown attempts are retained, not rewritten to Failed");
             foreach (ConnectionTestResult record in records)
             {
                 Check.NotEqual(ConnectionTestStage.ApiReached, record.Stage, "final record never stays at ApiReached");
@@ -211,8 +228,10 @@ public static class VerifierProtocolTests
         InspectionRoundSummary persisted = (await reload.GetInspectionSnapshotAsync()).LatestRound!;
         Check.Equal(1, persisted.Succeeded, "persisted succeeded");
         Check.Equal(1, persisted.PossibleSuccessCount, "persisted possible");
-        Check.Equal(1, persisted.Failed, "persisted failed");
-        Check.Equal(1, persisted.UnknownCount, "persisted unknown");
+        Check.Equal(2, persisted.Failed, "persisted failed includes raw-unknown target");
+        Check.Equal(0, persisted.UnknownCount, "persisted new-round legacy counter stays zero");
+        Check.Equal(3, (await reload.GetConnectionHistoryAsync()).Count(r => r.ModelId == "lost" && r.Stage == ConnectionTestStage.Unknown),
+            "raw unknown stages are unchanged after restart; V04 separately verifies export compatibility");
     }
 
     // V04 -------------------------------------------------------------------
@@ -352,7 +371,7 @@ public static class VerifierProtocolTests
     }
 
     // V06 -------------------------------------------------------------------
-    // UI 纯逻辑分类：四类不合并、PossibleSuccess 不被 ModelResponded 影响、中间阶段不算成功/失败。
+    // v0.9.2 展示三类终态；Unknown 仅展示为失败，Core 历史枚举保持兼容。
     public static async Task V06_UiClassification()
     {
         await Task.CompletedTask;
@@ -373,7 +392,7 @@ public static class VerifierProtocolTests
         Check.Equal(LatestResultPicker.ConnectionOutcome.PossibleSuccess, LatestResultPicker.Classify(Make(ConnectionTestStage.PossibleSuccess, false)), "possible success is its own class");
         Check.Equal(LatestResultPicker.ConnectionOutcome.PossibleSuccess, LatestResultPicker.Classify(Make(ConnectionTestStage.PossibleSuccess, true)), "possible success never merges into success");
         Check.Equal(LatestResultPicker.ConnectionOutcome.Failed, LatestResultPicker.Classify(Make(ConnectionTestStage.Failed, false)), "failed");
-        Check.Equal(LatestResultPicker.ConnectionOutcome.Unknown, LatestResultPicker.Classify(Make(ConnectionTestStage.Unknown, false)), "unknown");
+        Check.Equal(LatestResultPicker.ConnectionOutcome.Failed, LatestResultPicker.Classify(Make(ConnectionTestStage.Unknown, false)), "legacy unknown displays as failed");
         Check.Equal(LatestResultPicker.ConnectionOutcome.Incomplete, LatestResultPicker.Classify(Make(ConnectionTestStage.LocalValidationPassed, false)), "local validation incomplete, not failed");
         Check.Equal(LatestResultPicker.ConnectionOutcome.Incomplete, LatestResultPicker.Classify(Make(ConnectionTestStage.ApiReached, false)), "api reached incomplete, not failed");
         Check.Equal(LatestResultPicker.ConnectionOutcome.Incomplete, LatestResultPicker.Classify(Make((ConnectionTestStage)99, false)), "unknown enum is incomplete, never success");
@@ -384,9 +403,14 @@ public static class VerifierProtocolTests
             LatestResultPicker.OutcomeTone(LatestResultPicker.ConnectionOutcome.Success),
             LatestResultPicker.OutcomeTone(LatestResultPicker.ConnectionOutcome.PossibleSuccess),
             LatestResultPicker.OutcomeTone(LatestResultPicker.ConnectionOutcome.Failed),
-            LatestResultPicker.OutcomeTone(LatestResultPicker.ConnectionOutcome.Unknown),
         ];
-        Check.Equal(4, tones.Distinct(StringComparer.Ordinal).Count(), "four outcomes have distinct tones: " + string.Join(",", tones));
+        Check.Equal(3, tones.Distinct(StringComparer.Ordinal).Count(), "three terminal outcomes have distinct tones: " + string.Join(",", tones));
+        Check.Equal("ok", tones[0], "success uses green tone");
+        Check.Equal("bad", tones[2], "failed uses red tone");
+        var unknown = Make(ConnectionTestStage.Unknown, false);
+        Check.Equal("失败", LatestResultPicker.DescribeConnection(unknown).State, "unknown has failed display text");
+        Check.Equal("bad", LatestResultPicker.DescribeConnection(unknown).Tone, "unknown uses red tone");
+        Check.Equal(ConnectionTestStage.Unknown, unknown.Stage, "display never rewrites the stored stage");
         Check.Equal("possible", tones[1], "possible tone is dedicated");
         Check.Equal("成功（可能）", LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.PossibleSuccess), "possible text");
 
@@ -404,7 +428,7 @@ public static class VerifierProtocolTests
         string root = RepositoryRoot();
         string historyXaml = File.ReadAllText(Path.Combine(root, "src", "ProbeDesktop.App", "Windows", "ConnectionHistoryWindow.xaml"));
 
-        string[] expectedStatus = ["", "成功", "成功（可能）", "失败", "结果未知", "本地检查通过", "API 可达"];
+        string[] expectedStatus = ["", "成功", "成功（可能）", "失败", "本地检查通过", "API 可达"];
         string[] expectedSource = ["", "手动", "自动巡检", "立即巡检"];
         List<string> statusTags = Tags(historyXaml, "按状态筛选");
         List<string> sourceTags = Tags(historyXaml, "按来源筛选");
@@ -420,21 +444,19 @@ public static class VerifierProtocolTests
             LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.Success),
             LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.PossibleSuccess),
             LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.Failed),
-            LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.Unknown),
             "本地检查通过",
             "API 可达",
         };
         foreach (string tag in statusTags.Where(t => t.Length > 0))
             Check.True(labels.Contains(tag), "filter tag must be a producible result label: " + tag);
 
-        // 四个终态文案互不相同，筛选不会串类。
-        Check.Equal(4, new[]
+        // 三个展示终态文案互不相同，Unknown 合入失败筛选。
+        Check.Equal(3, new[]
         {
             LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.Success),
             LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.PossibleSuccess),
             LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.Failed),
-            LatestResultPicker.OutcomeText(LatestResultPicker.ConnectionOutcome.Unknown),
-        }.Distinct(StringComparer.Ordinal).Count(), "four result labels are distinct");
+        }.Distinct(StringComparer.Ordinal).Count(), "three result labels are distinct");
     }
 
     // V08 -------------------------------------------------------------------

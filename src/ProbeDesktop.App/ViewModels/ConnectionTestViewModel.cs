@@ -529,7 +529,7 @@ public sealed class ConnectionTestViewModel : ObservableObject, IDisposable
             }
             else if (!_disposed)
             {
-                ActionNote = "连接测试已取消；若请求已发出，结果未知，不能断定没有产生费用。";
+                ActionNote = "连接测试已取消（未确认模型响应）；若请求已发出，不能断定没有产生费用。";
             }
         }
         catch (ClientOperationException ex)
@@ -543,7 +543,7 @@ public sealed class ConnectionTestViewModel : ObservableObject, IDisposable
         {
             if (gen == _targetGen && !_disposed)
             {
-                ActionNote = "连接测试失败：" + UserMessages.Describe(ex) + " 结果未知时不能断定没有产生费用。";
+                ActionNote = "连接测试失败：" + UserMessages.Describe(ex) + " 若请求已发出，不能断定没有产生费用。";
             }
         }
         finally
@@ -561,7 +561,7 @@ public sealed class ConnectionTestViewModel : ObservableObject, IDisposable
         ConnectionTestStage.ModelResponded
             => $"连接成功（收到有效模型响应）；标记读取：{ProtocolInfo.ContextLabel(r.ContextCheck)}。{ProtocolInfo.ContextNote(r.ContextCheck)}",
         ConnectionTestStage.PossibleSuccess => "成功（可能）：中转站返回了成功响应，但没有确认到有效的模型消息。不能当作确认成功，也不能当作失败；不会自动重试。",
-        ConnectionTestStage.Unknown => "结果未知：不能断定没有产生费用，也不会自动重试。",
+        ConnectionTestStage.Unknown => "失败：未收到完整有效响应（如超时、连接中断或响应不兼容）；不能断定没有产生费用，也不会自动重试，详见下方状态。",
         ConnectionTestStage.Failed => "失败：未确认模型可用，详见下方状态。",
         ConnectionTestStage.LocalValidationPassed => "仅本地检查通过，未发送请求。",
         ConnectionTestStage.ApiReached => "API 可达，但未确认模型响应，详见下方状态。",
@@ -645,7 +645,7 @@ public sealed class ConnectionTestViewModel : ObservableObject, IDisposable
             "• 只发送给上述中转站，不经过 BazaarLink；携带该配置保存的 API Key（Key 版本 " + t.KeyRevision + "）。\n" +
             "• 授权只在本次程序运行期间有效，只针对当前这一个配置与模型；切换配置、模型、Key 或 Base URL 会自动关闭，重启程序后默认关闭。\n" +
             "• 切换页面标签不会停止；关闭程序后不再发送。睡眠或休眠恢复后，若已到点会正常进行最多一次，不会补发错过的累计次数。\n" +
-            "• 任一次失败、超时或结果未知会暂停并关闭自动测试，不会自动重试。\n" +
+            "• 任一次非确认成功（失败、超时、连接中断或成功（可能））都会暂停并关闭自动测试，不会自动重试。\n" +
             "• 可随时关闭；关闭不会撤回已发出的请求，也不保证退还费用。手动测试不受影响。\n\n" +
             "确认开启并授权重复调用吗？选“否”不会开启，也不会联网。";
         if (!_dialogs.Confirm("确认开启自动连接测试", message))
@@ -791,7 +791,7 @@ public sealed class ConnectionTestViewModel : ObservableObject, IDisposable
                     return;
                 }
 
-                // 只有确认的“成功”才继续下一次；成功（可能）、失败、结果未知、其他阶段一律暂停，不自动重试。标记不匹配不视为断连。
+                // 只有确认的“成功”才继续下一次；成功（可能）、失败（含底层 Unknown）、其他阶段一律暂停，不自动重试。标记不匹配不视为断连。
                 if (LatestResultPicker.Classify(done) == LatestResultPicker.ConnectionOutcome.Success)
                 {
                     AutoNote = $"{Format.Time(done.CompletedAt ?? done.StartedAt)} 第 {_autoRuns} 次自动测试：收到模型响应（标记读取：{ProtocolInfo.ContextLabel(done.ContextCheck)}）。";
@@ -955,7 +955,7 @@ public sealed class ConnectionTestViewModel : ObservableObject, IDisposable
             }
             else if (r.Stage == ConnectionTestStage.Unknown)
             {
-                _api.Set("未知", "warn", "请求可能已发出但没有完整响应（超时、网络中断或程序中断）；不能断定没有产生费用。");
+                _api.Set("失败（未收到完整响应）", "bad", "请求可能已发出但没有完整响应（超时、网络中断或程序中断）；不能断定没有产生费用。");
             }
             else if (r.Stage == ConnectionTestStage.Failed)
             {
@@ -978,11 +978,14 @@ public sealed class ConnectionTestViewModel : ObservableObject, IDisposable
             }
             else if (r.Stage == ConnectionTestStage.Unknown)
             {
-                _model.Set("结果未知", "warn", message + " 不能断定本次没有产生费用。");
+                var detail = message.Contains("产生费用", StringComparison.Ordinal)
+                    ? message
+                    : (message.Length > 0 ? message + " " : "") + "不能断定本次没有产生费用。";
+                _model.Set("失败", "bad", detail);
             }
             else if (r.Stage == ConnectionTestStage.Failed)
             {
-                _model.Set("未确认", "bad", message);
+                _model.Set("失败", "bad", message);
             }
             else
             {

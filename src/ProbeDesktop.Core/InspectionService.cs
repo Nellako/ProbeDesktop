@@ -39,7 +39,7 @@ public sealed partial class DesktopService : IGlobalInspectionService, IInspecti
             DateTimeOffset deadline = state.Vault.InspectionHostDeadlines.GetValueOrDefault(InspectionHost(profile.BaseUrl));
             return new InspectionTargetStatus(target, sanitizer.Text(profile.Name, 100), authorization, grant?.AuthorizedAt, deadline > DateTimeOffset.UtcNow ? deadline : null) { AuthorizedModels = authorized, HasModelCache = profile.ModelsFetchedAt is not null };
         }).ToArray();
-        return new(state.Vault.InspectionSettings, statuses, SanitizeRound(state.Vault.LatestInspectionRound, sanitizer))
+        return new(state.Vault.InspectionSettings, statuses, SanitizeRound(InspectionRoundForDisplay(state), sanitizer))
         { Selections = state.Profiles.Select(p => SelectionFor(state, p.Id)).ToArray() };
     }
     public async Task<InspectionSnapshot> GetInspectionSnapshotAsync(CancellationToken cancellationToken = default)
@@ -147,7 +147,7 @@ public sealed partial class DesktopService : IGlobalInspectionService, IInspecti
                         round = round with { Skipped = round.Skipped + 1 };
                     else
                     {
-                        ConnectionTestResult? finalResult = null;
+                        List<ConnectionTestResult> attempts = [];
                         try
                         {
                             for (int attempt = 0; attempt < InspectionRoundResults.MaxAttempts; attempt++)
@@ -155,11 +155,12 @@ public sealed partial class DesktopService : IGlobalInspectionService, IInspecti
                                 // Reuse the same pacing and both pre-send authorization checks for every attempt.
                                 if (!firstRequest) await Task.Delay(300, cancellationToken).ConfigureAwait(false);
                                 firstRequest = false;
-                                finalResult = await RunConnectionAsync(status.Target.ProfileId, model, null, false, cancellationToken,
+                                ConnectionTestResult result = await RunConnectionAsync(status.Target.ProfileId, model, null, false, cancellationToken,
                                     status.Target, round.RoundId, nonce, trigger == InspectionTrigger.Automatic ? ConnectionRecordSource.Automatic : ConnectionRecordSource.RoundManual).ConfigureAwait(false);
-                                if (finalResult.HttpStatusCode == 429) blockedHosts.Add(InspectionHost(status.Target.BaseUrl));
-                                if (finalResult.Stage == ConnectionTestStage.ModelResponded || finalResult.HttpStatusCode is 401 or 403 or 429 ||
-                                    finalResult.Code is "CancelledBeforeSend" or "InspectionStopped" or "InspectionNotAuthorized" or "ConnectionTargetChanged" or "ProfileNotFound") break;
+                                attempts.Add(result);
+                                if (result.HttpStatusCode == 429) blockedHosts.Add(InspectionHost(status.Target.BaseUrl));
+                                if (result.Stage == ConnectionTestStage.ModelResponded || result.HttpStatusCode is 401 or 403 or 429 ||
+                                    result.Code is "CancelledBeforeSend" or "InspectionStopped" or "InspectionNotAuthorized" or "ConnectionTargetChanged" or "ProfileNotFound") break;
                                 cancellationToken.ThrowIfCancellationRequested();
                             }
                         }
@@ -168,15 +169,16 @@ public sealed partial class DesktopService : IGlobalInspectionService, IInspecti
                         catch (ClientOperationException ex) when (ex.Code is "InspectionStopped")
                         { round = round with { Cancelled = true }; }
                         catch (ClientOperationException ex) when (ex.Code is "InspectionNotAuthorized" or "ProfileNotFound" or "ConnectionRateLimited" or "ConnectionBusy")
-                        { /* An earlier completed attempt remains the final result, not a second skipped target. */ }
+                        { /* Earlier completed attempts still count, not a second skipped target. */ }
                         // Account exactly once, even if cancellation/authorization change interrupted the next delay/check.
+                        ConnectionTestResult? finalResult = InspectionRoundResults.BestCompleted(attempts);
                         round = finalResult?.Stage switch
                         {
                             ConnectionTestStage.ModelResponded => round with { Succeeded = round.Succeeded + 1 },
                             ConnectionTestStage.PossibleSuccess => round with { PossibleSuccessCount = round.PossibleSuccessCount + 1 },
-                            ConnectionTestStage.Failed => round with { Failed = round.Failed + 1 },
                             null => round with { Skipped = round.Skipped + 1 },
-                            _ => round with { UnknownCount = round.UnknownCount + 1 }
+                            // Unknown remains raw in each attempt, but all non-success outcomes count as failed in new rounds.
+                            _ => round with { Failed = round.Failed + 1 }
                         };
                     }
                     progress?.Report(round);
@@ -215,8 +217,46 @@ public sealed partial class DesktopService : IGlobalInspectionService, IInspecti
         CurrentProfileName = round.CurrentProfileName is null ? null : sanitizer.Text(round.CurrentProfileName, 100),
         CurrentModelId = round.CurrentModelId is null ? null : sanitizer.Identifier(round.CurrentModelId)
     };
-    private static void TrimConnectionHistory(StoreState state) => state.Vault.ConnectionHistory = state.Vault.ConnectionHistory
-        .Where(r => r.StartedAt >= DateTimeOffset.UtcNow.AddDays(-30)).OrderByDescending(r => r.StartedAt).Take(10_000).ToList();
+    private static InspectionRoundSummary? InspectionRoundForDisplay(StoreState state)
+    {
+        InspectionRoundSummary? round = state.Vault.LatestInspectionRound;
+        if (round is null) return null;
+        // A read-only projection: never migrate the persisted summary or rewrite individual attempts.
+        InspectionRoundSummary fallback = round with { Failed = round.Failed + round.UnknownCount, UnknownCount = 0 };
+        if (round.CompletedAt is null) return fallback; // Do not count the current target before its progress is committed.
+        long accounted = (long)round.Succeeded + round.PossibleSuccessCount + round.Failed + round.UnknownCount;
+        if (accounted <= 0 || accounted + round.Skipped > round.Total) return fallback;
+        var attempts = RetainedConnectionHistory(state.Vault.ConnectionHistory)
+            .Where(r => r.RoundId == round.RoundId && r.Source is ConnectionRecordSource.Automatic or ConnectionRecordSource.RoundManual)
+            .ToArray();
+        if (attempts.Any(r => r.CompletedAt is null)) return fallback;
+        var targets = attempts.GroupBy(r => (r.ProfileId, r.ModelId, r.KeyRevision, r.BaseUrl, r.Protocol)).ToArray();
+        // Missing/deleted target histories must not erase known aggregate outcomes, especially after history trimming/clearing.
+        if (targets.Length != accounted) return fallback;
+        var best = InspectionRoundResults.FinalConnections(attempts, round.RoundId);
+        var last = targets.Select(g => g.OrderByDescending(r => r.CompletedAt).ThenByDescending(r => r.StartedAt).First());
+        static (int Success, int Possible, int Failed) Counts(IEnumerable<ConnectionTestResult> results)
+        {
+            int success = 0, possible = 0, failed = 0;
+            foreach (ConnectionTestResult result in results)
+                switch (InspectionRoundResults.OutcomeRank(result))
+                {
+                    case 3: success++; break;
+                    case 2: possible++; break;
+                    default: failed++; break;
+                }
+            return (success, possible, failed);
+        }
+        var known = (fallback.Succeeded, fallback.PossibleSuccessCount, fallback.Failed);
+        var bestCounts = Counts(best);
+        // Legacy data has no per-round attempt count. Only reinterpret a summary that reconciles with either
+        // the old last-attempt rule or the new best-attempt rule; otherwise partial/deleted history is inconclusive.
+        if (known != Counts(last) && known != bestCounts) return fallback;
+        return fallback with { Succeeded = bestCounts.Success, PossibleSuccessCount = bestCounts.Possible, Failed = bestCounts.Failed };
+    }
+    private static IEnumerable<ConnectionTestResult> RetainedConnectionHistory(IEnumerable<ConnectionTestResult> history) => history
+        .Where(r => r.StartedAt >= DateTimeOffset.UtcNow.AddDays(-30)).OrderByDescending(r => r.StartedAt).Take(10_000);
+    private static void TrimConnectionHistory(StoreState state) => state.Vault.ConnectionHistory = RetainedConnectionHistory(state.Vault.ConnectionHistory).ToList();
     public async Task<IReadOnlyList<ConnectionTestResult>> GetConnectionHistoryAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();

@@ -35,11 +35,19 @@
             <Style.Triggers>
                 <DataTrigger Binding="{Binding ContextTone}" Value="ok">
                     <Setter Property="Background" Value="{StaticResource SuccessLightBrush}" />
-                    <Setter Property="BorderBrush" Value="Transparent" />
+                    <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ContextTone}" Value="possible">
+                    <Setter Property="Background" Value="{StaticResource PossibleLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource PossibleBorderBrush}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding ContextTone}" Value="warn">
                     <Setter Property="Background" Value="{StaticResource WarningLightBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ContextTone}" Value="bad">
+                    <Setter Property="Background" Value="{StaticResource DangerLightBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource DangerBorderBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -51,8 +59,14 @@
                 <DataTrigger Binding="{Binding ContextTone}" Value="ok">
                     <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
                 </DataTrigger>
+                <DataTrigger Binding="{Binding ContextTone}" Value="possible">
+                    <Setter Property="Foreground" Value="{StaticResource PossibleBrush}" />
+                </DataTrigger>
                 <DataTrigger Binding="{Binding ContextTone}" Value="warn">
                     <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ContextTone}" Value="bad">
+                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -83,8 +97,14 @@
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource Hint}">
                                     <Style.Triggers>
+                                        <DataTrigger Binding="{Binding DetailTone}" Value="possible">
+                                            <Setter Property="Foreground" Value="{StaticResource PossibleBrush}" />
+                                        </DataTrigger>
                                         <DataTrigger Binding="{Binding DetailTone}" Value="warn">
                                             <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding DetailTone}" Value="bad">
+                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>

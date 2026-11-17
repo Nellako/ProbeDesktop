@@ -34,7 +34,7 @@ public sealed class RecentLine : ObservableObject
         private set => SetProperty(ref _tone, value);
     }
 
-    /// <summary>直连测试独立的标记读取徽章文案（如“标记：通过 / 不匹配 / 无法判断 / 未校验”）；鉴别记录为空。</summary>
+    /// <summary>直连测试独立的标记读取徽章文案（如“标记：通过 / 不匹配 / 无法判断 / 未检验”）；鉴别记录为空。</summary>
     public string ContextBadge
     {
         get => _contextBadge;
@@ -240,7 +240,7 @@ public sealed class ModelRecentResultsViewModel : ObservableObject, IDisposable
         var detail = r.ContextCheck == ConnectionContextCheck.NotChecked || !rawMsg.Contains("标记读取", StringComparison.Ordinal)
             ? (rawMsg.Length == 0 ? ProtocolInfo.ContextNote(r.ContextCheck) : rawMsg + " " + ProtocolInfo.ContextNote(r.ContextCheck))
             : rawMsg;
-        var detailTone = r.ContextCheck == ConnectionContextCheck.Mismatch ? "warn" : "none";
+        var detailTone = r.ContextCheck == ConnectionContextCheck.Mismatch ? "possible" : "none";
         var meta = $"完成于 {Format.Time(LatestResultPicker.ConnectionTime(r))} · 来源：{ConnectionHistoryViewModel.SourceText(r.Source)}";
         var note = LatestResultPicker.ConfigDiffers(r.KeyRevision, r.BaseUrl, r.Protocol, profile.KeyRevision, profile.BaseUrl, profile.Protocol)
             ? "该记录之后，此配置的 Key 版本、地址或协议已变化，结果仅供参考。"

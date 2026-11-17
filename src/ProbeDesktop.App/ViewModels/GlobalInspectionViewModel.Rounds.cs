@@ -169,7 +169,7 @@ public sealed partial class GlobalInspectionViewModel
         RequestResultsReload();
     }
 
-    // ---- 最新一轮的逐模型结果（只显示最新一轮，每个目标只显示最后一次尝试；各次尝试的完整历史在连接记录窗口）----
+    // ---- 最新一轮的逐模型结果（只显示最新一轮，每个目标显示本轮最高状态结果；各次尝试的完整历史在连接记录窗口）----
 
     private void RequestResultsReload()
     {
@@ -224,14 +224,14 @@ public sealed partial class GlobalInspectionViewModel
                     continue;
                 }
 
-                // 每个目标最多尝试 3 次：这里只显示各目标的最后一次尝试，各次尝试仍完整保留在连接记录。
+                // 每个目标最多尝试 3 次：这里按精确目标显示本轮已完成尝试中的最高状态（同级取最新），各次尝试仍独立保留在连接记录。
                 var rows = ConnectionRoundDisplay.LatestPerTarget(history, round.RoundId)
                     .Select(ToRow)
                     .ToList();
                 RoundResults = new ObservableCollection<RoundResultRow>(rows);
                 ResultsNote = rows.Count == 0
                     ? "本轮暂无模型结果记录（尚未完成第一个模型，或被跳过的模型不产生记录）。只显示最新一轮，完整历史请到“连接记录”。"
-                    : $"只显示最新一轮各模型的最后一次尝试结果，按开始时间倒序；每个模型每轮最多尝试 {ConnectionRoundDisplay.MaxAttempts} 次，中间尝试不单独列出也不计入本轮统计。被跳过的模型不产生记录。各次尝试的完整历史请到“连接记录”。";
+                    : $"只显示最新一轮各模型在本轮的最高状态结果（成功 ＞ 成功（可能）＞ 失败，同级取最新，标记读取跟随该代表记录），按代表记录开始时间倒序；每个模型每轮最多尝试 {ConnectionRoundDisplay.MaxAttempts} 次，其余尝试不单独列出也不重复计入本轮统计。被跳过的模型不产生记录。各次尝试的完整历史请到“连接记录”。";
             }
         }
         finally
@@ -250,7 +250,7 @@ public sealed partial class GlobalInspectionViewModel
         string tone;
         if (r.CompletedAt is null)
         {
-            (text, tone) = _busy ? ("进行中", "none") : ("结果未知", "warn");
+            (text, tone) = _busy ? ("进行中", "none") : ("失败", "bad");
         }
         else
         {
@@ -277,7 +277,7 @@ public sealed partial class GlobalInspectionViewModel
         var detail = UserMessages.Redact(r.Message);
         if (r.CompletedAt is not null && r.ContextCheck == ConnectionContextCheck.NotChecked && !detail.Contains("标记", StringComparison.Ordinal))
         {
-            detail = (detail.Trim() + " 旧记录未校验标记读取，不追溯补判。").Trim();
+            detail = (detail.Trim() + " 旧记录未检验标记读取，不追溯补判。").Trim();
         }
 
         if (r.HttpStatusCode is { } http)

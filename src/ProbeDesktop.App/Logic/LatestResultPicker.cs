@@ -5,7 +5,7 @@ namespace ProbeDesktop.App.Logic;
 /// <summary>
 /// 模型页“最近结果”的展示规则（纯逻辑，只依赖 Core 类型）。
 /// “最近已完成”的筛选由 Core 的 ILatestResultsService 完成（按配置 ID + 模型 ID 精确匹配，
-/// 直连要求有完成时间，鉴别要求终态，失败也算已完成）；这里只负责展示用的时间、状态与“配置已变更”判断，
+/// 直连要求有完成时间，并取最新轮次内的最高状态；鉴别要求终态，失败也算已完成）；这里只负责展示用的时间、状态与“配置已变更”判断，
 /// 因此展示时间一律取完成时间，与模型列表的拉取/刷新时间无关。
 /// </summary>
 public static class LatestResultPicker
@@ -23,31 +23,29 @@ public static class LatestResultPicker
            || !string.Equals(recordBaseUrl.TrimEnd('/'), currentBaseUrl.TrimEnd('/'), StringComparison.Ordinal);
 
     /// <summary>
-    /// 直连记录的展示分类。四个终态互不重叠：成功 / 成功（可能）/ 失败 / 结果未知。
-    /// Incomplete 表示记录停在“本地检查通过”或“API 可达”等中间阶段，既不是成功也不是确认失败，不计入四类统计。
+    /// 直连记录的展示分类：成功 / 成功（可能）/ 失败（含底层 Unknown）。
+    /// Incomplete 表示记录停在中间阶段，不计入三类终态统计。历史底层状态不改写。
     /// </summary>
-    public enum ConnectionOutcome { Success, PossibleSuccess, Failed, Unknown, Incomplete }
+    public enum ConnectionOutcome { Success, PossibleSuccess, Failed, Incomplete }
 
     /// <summary>
     /// 按 Stage 分类，不单看 ModelResponded：PossibleSuccess 的 ModelResponded 恒为 false，
     /// 必须先于 ModelResponded 判断，避免被误并入“成功”或“失败”。
     /// </summary>
-    public static ConnectionOutcome Classify(ConnectionTestResult r) => r.Stage switch
+    public static ConnectionOutcome Classify(ConnectionTestResult r) => InspectionRoundResults.OutcomeRank(r) switch
     {
-        ConnectionTestStage.PossibleSuccess => ConnectionOutcome.PossibleSuccess,
-        ConnectionTestStage.ModelResponded => ConnectionOutcome.Success,
-        ConnectionTestStage.Failed => ConnectionOutcome.Failed,
-        ConnectionTestStage.Unknown => ConnectionOutcome.Unknown,
-        _ => r.ModelResponded ? ConnectionOutcome.Success : ConnectionOutcome.Incomplete,
+        3 => ConnectionOutcome.Success,
+        2 => ConnectionOutcome.PossibleSuccess,
+        1 => ConnectionOutcome.Failed,
+        _ => ConnectionOutcome.Incomplete,
     };
 
-    /// <summary>四类终态的统一文案；Incomplete 没有统一文案，由调用方按 Stage 给出。</summary>
+    /// <summary>三类终态的统一文案；Incomplete 没有统一文案，由调用方按 Stage 给出。</summary>
     public static string OutcomeText(ConnectionOutcome outcome) => outcome switch
     {
         ConnectionOutcome.Success => "成功",
         ConnectionOutcome.PossibleSuccess => "成功（可能）",
         ConnectionOutcome.Failed => "失败",
-        ConnectionOutcome.Unknown => "结果未知",
         _ => "未完成",
     };
 
@@ -57,7 +55,6 @@ public static class LatestResultPicker
         ConnectionOutcome.Success => "ok",
         ConnectionOutcome.PossibleSuccess => "possible",
         ConnectionOutcome.Failed => "bad",
-        ConnectionOutcome.Unknown => "warn",
         _ => "none",
     };
 

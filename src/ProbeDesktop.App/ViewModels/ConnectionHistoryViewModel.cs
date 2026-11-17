@@ -146,14 +146,14 @@ public sealed class ConnectionHistoryViewModel : ObservableObject
     public string CountText => $"共 {_all.Count} 条，当前显示 {View.Cast<object>().Count()} 条";
 
     /// <summary>
-    /// 当前显示范围内的分项统计。成功、成功（可能）、失败、结果未知各自独立计数，互不合并；
+    /// 当前显示范围内的分项统计。成功、成功（可能）、失败（含原结果未知）；
     /// 停在中间阶段的记录单列为“未完成”（为 0 时不显示），使各项之和等于当前显示条数。
     /// </summary>
     public string StatsText
     {
         get
         {
-            int success = 0, possible = 0, failed = 0, unknown = 0, incomplete = 0;
+            int success = 0, possible = 0, failed = 0, incomplete = 0;
             foreach (var r in View.Cast<ConnectionTestResult>())
             {
                 switch (LatestResultPicker.Classify(r))
@@ -161,12 +161,11 @@ public sealed class ConnectionHistoryViewModel : ObservableObject
                     case LatestResultPicker.ConnectionOutcome.Success: success++; break;
                     case LatestResultPicker.ConnectionOutcome.PossibleSuccess: possible++; break;
                     case LatestResultPicker.ConnectionOutcome.Failed: failed++; break;
-                    case LatestResultPicker.ConnectionOutcome.Unknown: unknown++; break;
                     default: incomplete++; break;
                 }
             }
 
-            var text = $"当前显示：成功 {success} · 成功（可能） {possible} · 失败 {failed} · 结果未知 {unknown}";
+            var text = $"当前显示：成功 {success} · 成功（可能） {possible} · 失败 {failed}";
             return incomplete > 0 ? text + $" · 未完成 {incomplete}" : text;
         }
     }
@@ -229,19 +228,18 @@ public sealed class ConnectionHistoryViewModel : ObservableObject
     public static string ToneOf(ConnectionTestResult r) => LatestResultPicker.Classify(r) switch
     {
         LatestResultPicker.ConnectionOutcome.Failed => "danger",
-        LatestResultPicker.ConnectionOutcome.Unknown => "warn",
         LatestResultPicker.ConnectionOutcome.PossibleSuccess => "possible",
-        _ when r.ContextCheck == ConnectionContextCheck.Mismatch => "warn",
+        _ when r.ContextCheck == ConnectionContextCheck.Mismatch => "possible",
         _ => "info",
     };
 
     private static string ContextDetailText(ConnectionTestResult r) => r.ContextCheck == ConnectionContextCheck.NotChecked
-        ? "未校验（旧记录，不追溯补判）"
+        ? "未检验（旧记录，不追溯补判）"
         : r.PromptVersion > 0
             ? $"{ProtocolInfo.ContextLabel(r.ContextCheck)}（约256 token，Prompt v{r.PromptVersion}）"
             : ProtocolInfo.ContextLabel(r.ContextCheck);
 
-    /// <summary>记录的结果文字：四个终态用统一文案，中间阶段沿用阶段名。</summary>
+    /// <summary>记录的结果文字：三个终态用统一文案，中间阶段沿用阶段名。</summary>
     public static string ResultLabel(ConnectionTestResult r)
     {
         var outcome = LatestResultPicker.Classify(r);
@@ -421,7 +419,7 @@ public sealed class ConnectionHistoryViewModel : ObservableObject
         ConnectionTestStage.ModelResponded => "成功",
         ConnectionTestStage.PossibleSuccess => "成功（可能）",
         ConnectionTestStage.Failed => "失败",
-        ConnectionTestStage.Unknown => "结果未知",
+        ConnectionTestStage.Unknown => "失败",
         _ => "未识别阶段",
     };
 }
