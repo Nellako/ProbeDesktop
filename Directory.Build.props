@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>14</LangVersion>
+    <Deterministic>true</Deterministic>
+    <!--
+      对外正式版本编号为 0.9.1；继承内部 1.3 的功能与 schema 3，不按产品版本号降级数据。
+      InformationalVersion 固定为 0.9.1，不自动附加本机 Git 提交号或工作区状态，避免本机路径/提交信息写入产物。
+      需要追溯构建来源时，在发布记录中单独写明，而不是嵌入程序集元数据。
+    -->
+    <Version>0.9.1</Version>
+    <AssemblyVersion>0.9.1.0</AssemblyVersion>
+    <FileVersion>0.9.1.0</FileVersion>
+    <InformationalVersion>0.9.1</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

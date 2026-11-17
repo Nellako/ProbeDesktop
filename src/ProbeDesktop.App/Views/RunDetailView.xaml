@@ -1,0 +1,187 @@
+<UserControl x:Class="ProbeDesktop.App.Views.RunDetailView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:ProbeDesktop.App.Views"
+             Style="{StaticResource PageRoot}"
+             AutomationProperties.Name="检测记录详情">
+    <UserControl.Resources>
+        <DataTemplate x:Key="FactTemplate">
+            <Grid Margin="0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="128" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Label}" Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Top" TextWrapping="Wrap" Margin="0,0,12,0" />
+                <TextBox Grid.Column="1" Style="{StaticResource ValueText}" Text="{Binding Value, Mode=OneWay}"
+                         AutomationProperties.Name="{Binding Label}" />
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <StackPanel>
+        <!-- 标题与状态 -->
+        <DockPanel LastChildFill="True">
+            <Border x:Name="Badge" DockPanel.Dock="Left" CornerRadius="11" Padding="10,3" Margin="0,0,12,0" VerticalAlignment="Center"
+                    AutomationProperties.Name="{Binding StateText, StringFormat='状态：{0}'}">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Background" Value="{StaticResource PrimaryLightBrush}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding StateTone}" Value="success">
+                                <Setter Property="Background" Value="{StaticResource SuccessLightBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding StateTone}" Value="warning">
+                                <Setter Property="Background" Value="{StaticResource WarningLightBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding StateTone}" Value="danger">
+                                <Setter Property="Background" Value="{StaticResource DangerLightBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <TextBlock Text="{Binding StateText}" FontWeight="SemiBold" FontSize="12">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource PrimaryDarkBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding StateTone}" Value="success">
+                                    <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding StateTone}" Value="warning">
+                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding StateTone}" Value="danger">
+                                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Border>
+            <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center" ToolTip="{Binding Title}" />
+        </DockPanel>
+        <TextBlock Text="{Binding StateExplanation}" Style="{StaticResource Hint}" Margin="0,8,0,0" />
+
+        <!-- 进度：只显示检测项计数与阶段，不推算总百分比 -->
+        <Border Background="{StaticResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,12,0,0">
+        <StackPanel>
+        <WrapPanel>
+            <ProgressBar IsIndeterminate="True" Width="140" Height="4" Margin="0,0,10,0" VerticalAlignment="Center"
+                         Visibility="{Binding IsRunning, Converter={StaticResource BoolToVis}}"
+                         AutomationProperties.Name="远端检测进行中" />
+            <TextBlock Text="{Binding ProgressText}" Margin="0,0,14,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding PhaseText}" Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Center"
+                       TextWrapping="Wrap" />
+        </WrapPanel>
+
+        <!-- 本地查询控制 -->
+        <WrapPanel Margin="0,10,0,0">
+            <Button Content="查询一次" Command="{Binding PollOnceCommand}" Margin="0,0,8,6"
+                    AutomationProperties.Name="查询一次进度" ToolTip="向 BazaarLink 读取一次该任务进度，不会重新提交" />
+            <Button Content="恢复自动查询" Command="{Binding ResumeCommand}" Margin="0,0,8,6"
+                    AutomationProperties.Name="恢复自动查询" ToolTip="每 5 秒读取一次进度，直到任务结束或出现问题" />
+            <Button Content="停止本地查询" Command="{Binding StopCommand}" Margin="0,0,8,6"
+                    AutomationProperties.Name="停止本地查询" ToolTip="只停止本程序的查询，远端检测不会停止" />
+            <TextBlock Text="正在查询…" VerticalAlignment="Center" Foreground="{StaticResource PrimaryBrush}" Margin="4,0,0,6"
+                       Visibility="{Binding IsPolling, Converter={StaticResource BoolToVis}}" />
+        </WrapPanel>
+        <TextBlock Text="{Binding PollNote}" Style="{StaticResource Hint}"
+                   Visibility="{Binding PollNote, Converter={StaticResource HasValueToVis}}" />
+        </StackPanel>
+        </Border>
+
+        <!-- 错误 -->
+        <Border Style="{StaticResource DangerCallout}" Margin="0,12,0,0"
+                Visibility="{Binding Error, Converter={StaticResource HasValueToVis}}">
+            <StackPanel>
+                <TextBlock Text="错误 / 提示" FontWeight="SemiBold" Foreground="{StaticResource DangerBrush}" Margin="0,0,0,4" />
+                <TextBox Style="{StaticResource ValueText}" Text="{Binding Error, Mode=OneWay}" AutomationProperties.Name="错误信息" />
+            </StackPanel>
+        </Border>
+
+        <!-- 服务的身份判断 -->
+        <TextBlock Text="服务的身份判断" Style="{StaticResource SectionTitle}" Margin="0,24,0,8" />
+        <Border Style="{StaticResource InfoCallout}" Margin="0,0,0,12">
+            <TextBlock Style="{StaticResource Hint}" Foreground="{StaticResource TextBrush}"
+                       Text="以下为 BazaarLink 基于本次样本做出的概率性推断，不是模型真实身份或能力的确定性证明。网站已停用综合评分，本程序不显示“降智总分”。" />
+        </Border>
+        <ItemsControl ItemsSource="{Binding VerdictFacts}" ItemTemplate="{StaticResource FactTemplate}" Focusable="False" />
+
+        <!-- 推理依据 -->
+        <StackPanel Visibility="{Binding HasReasoning, Converter={StaticResource BoolToVis}}">
+            <TextBlock Text="推理依据（服务提供）" Style="{StaticResource SectionTitle}" Margin="0,20,0,8" />
+            <ItemsControl ItemsSource="{Binding Reasoning}" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <DockPanel Margin="0,2">
+                            <TextBlock DockPanel.Dock="Left" Text="•" Margin="0,0,6,0" Foreground="{StaticResource PrimaryBrush}" />
+                            <TextBox Style="{StaticResource ValueText}" Text="{Binding Mode=OneWay}" AutomationProperties.Name="推理依据" />
+                        </DockPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <!-- 行为警示 -->
+        <StackPanel Visibility="{Binding HasWarnings, Converter={StaticResource BoolToVis}}">
+            <TextBlock Text="行为警示" Style="{StaticResource SectionTitle}" Margin="0,20,0,8" />
+            <ItemsControl ItemsSource="{Binding Warnings}" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border BorderThickness="3,0,0,0" BorderBrush="{StaticResource WarningBrush}" Background="{StaticResource WarningLightBrush}"
+                                Padding="12,8" Margin="0,0,0,8" CornerRadius="0,6,6,0">
+                            <StackPanel>
+                                <TextBlock FontWeight="SemiBold" TextWrapping="Wrap">
+                                    <Run Text="{Binding SeverityText, Mode=OneWay}" Foreground="{StaticResource WarningBrush}" />
+                                    <Run Text="·" />
+                                    <Run Text="{Binding Label, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBox Style="{StaticResource ValueText}" Text="{Binding Evidence, Mode=OneWay}" Margin="0,2,0,0"
+                                         AutomationProperties.Name="{Binding Label}"
+                                         Visibility="{Binding Evidence, Converter={StaticResource HasValueToVis}}" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <!-- 检测项 -->
+        <TextBlock Text="检测项" Style="{StaticResource SectionTitle}" Margin="0,20,0,8" />
+        <TextBlock Text="尚无检测项数据。" Style="{StaticResource Hint}"
+                   Visibility="{Binding HasItems, Converter={StaticResource InverseBoolToVis}}" />
+        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="0,0,0,4"
+                Visibility="{Binding HasItems, Converter={StaticResource BoolToVis}}">
+        <DataGrid ItemsSource="{Binding Items}" MaxHeight="320" AutomationProperties.Name="检测项列表" Margin="1,1,1,0"
+                  ScrollViewer.CanContentScroll="True" views:ScrollForwarding.Enabled="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="分组" Binding="{Binding Group}" Width="90" ElementStyle="{StaticResource MutedCell}" />
+                <DataGridTextColumn Header="检测项" Binding="{Binding Label}" Width="150" ElementStyle="{StaticResource WrapCell}" />
+                <DataGridTextColumn Header="状态" Binding="{Binding StatusText}" Width="64" ElementStyle="{StaticResource WrapCell}" />
+                <DataGridTextColumn Header="结果" Binding="{Binding PassedText}" Width="64" ElementStyle="{StaticResource WrapCell}" />
+                <DataGridTextColumn Header="说明" Binding="{Binding Detail}" Width="*" MinWidth="120" ElementStyle="{StaticResource WrapCell}" />
+                <DataGridTextColumn Header="耗时" Binding="{Binding DurationText}" Width="70" ElementStyle="{StaticResource MutedCell}" />
+                <DataGridTextColumn Header="Token 入/出" Binding="{Binding TokensText}" Width="104" ElementStyle="{StaticResource MutedCell}" />
+            </DataGrid.Columns>
+        </DataGrid>
+        </Border>
+
+        <!-- 记录信息 -->
+        <TextBlock Text="记录信息" Style="{StaticResource SectionTitle}" Margin="0,20,0,8" />
+        <ItemsControl ItemsSource="{Binding Facts}" ItemTemplate="{StaticResource FactTemplate}" Focusable="False" />
+
+        <StackPanel Margin="0,16,0,0" Visibility="{Binding ReportUrl, Converter={StaticResource HasValueToVis}}">
+            <TextBlock Text="报告链接（可能公开可见）" FontWeight="SemiBold" />
+            <DockPanel Margin="0,6,0,0">
+                <Button DockPanel.Dock="Right" Content="复制链接" Command="{Binding CopyReportUrlCommand}" Margin="8,0,0,0"
+                        AutomationProperties.Name="复制报告链接" />
+                <TextBox Style="{StaticResource ValueText}" Text="{Binding ReportUrl, Mode=OneWay}" VerticalAlignment="Center"
+                         AutomationProperties.Name="报告链接" />
+            </DockPanel>
+        </StackPanel>
+        <WrapPanel Margin="0,12,0,0" Visibility="{Binding HasRemoteId, Converter={StaticResource BoolToVis}}">
+            <Button Content="复制远端任务标识" Command="{Binding CopyRunIdCommand}" AutomationProperties.Name="复制远端任务标识" />
+        </WrapPanel>
+    </StackPanel>
+</UserControl>

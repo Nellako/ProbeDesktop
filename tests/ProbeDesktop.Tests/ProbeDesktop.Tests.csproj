@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>14</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>ProbeDesktop.Tests</AssemblyName>
+    <RootNamespace>ProbeDesktop.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ProbeDesktop.Core\ProbeDesktop.Core.csproj" />
+    <Compile Include="..\..\src\ProbeDesktop.App\Logic\InspectionScheduler.cs" Link="AppLogic\InspectionScheduler.cs" />
+    <Compile Include="..\..\src\ProbeDesktop.App\Logic\SerialBatchRunner.cs" Link="AppLogic\SerialBatchRunner.cs" />
+    <Compile Include="..\..\src\ProbeDesktop.App\Logic\ModelCacheText.cs" Link="AppLogic\ModelCacheText.cs" />
+    <!-- Verifier: pure display-classification logic only (no WPF dependency). -->
+    <Compile Include="..\..\src\ProbeDesktop.App\Logic\LatestResultPicker.cs" Link="AppLogic\LatestResultPicker.cs" />
+    <!-- Independent verification: automatic observation mapping is pure logic over Core records (no WPF dependency). -->
+    <Compile Include="..\..\src\ProbeDesktop.App\Logic\ProblemObservations.cs" Link="AppLogic\ProblemObservations.cs" />
+    <!-- Connection retry presentation: latest-round per-target display rule and confirmation text (pure logic over Core records). -->
+    <Compile Include="..\..\src\ProbeDesktop.App\Logic\ConnectionRoundDisplay.cs" Link="AppLogic\ConnectionRoundDisplay.cs" />
+    <Compile Include="..\..\src\ProbeDesktop.App\Logic\ConnectionScopeText.cs" Link="AppLogic\ConnectionScopeText.cs" />
+    <Compile Include="..\..\src\ProbeDesktop.App\Services\ProtocolInfo.cs" Link="AppLogic\ProtocolInfo.cs" />
+  </ItemGroup>
+</Project>

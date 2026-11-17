@@ -1,0 +1,18 @@
+**/bin/
+**/obj/
+artifacts/
+.tools/
+*.user
+*.suo
+.vs/
+*.har
+*.network-request
+*.network-response
+
+# Local runtime state and credentials must never be committed.
+desktop-state.json*
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12

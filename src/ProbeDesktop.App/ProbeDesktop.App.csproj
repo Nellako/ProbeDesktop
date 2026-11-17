@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ProbeDesktop.App</RootNamespace>
+    <AssemblyName>ProbeDesktop</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Product>ProbeDesktop</Product>
+    <Description>中转模型检测桌面客户端（个人自用，非官方）</Description>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+    <!-- WFO0003：WinForms 仅用于 NotifyIcon；本程序由 app.manifest 明确声明 PerMonitorV2，不依赖 WinForms 的 HighDpiMode，故不改 DPI 行为、只抑制该提示。 -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms 仅用于 NotifyIcon；移除其隐式 using，避免与 WPF 的 Application/MessageBox/Button/Timer 等歧义。 -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProbeDesktop.Core\ProbeDesktop.Core.csproj" />
+  </ItemGroup>
+
+</Project>

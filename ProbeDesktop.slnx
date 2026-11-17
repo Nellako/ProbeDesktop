@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/ProbeDesktop.Core/ProbeDesktop.Core.csproj" />
+  <Project Path="src/ProbeDesktop.App/ProbeDesktop.App.csproj" />
+  <Project Path="tests/ProbeDesktop.Tests/ProbeDesktop.Tests.csproj" />
+</Solution>
