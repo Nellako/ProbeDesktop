@@ -10,13 +10,22 @@
 - 两类记录窗口、脱敏摘要导出、Windows 托盘驻留与问题通知。
 - Windows 当前用户 DPAPI 凭据保护及密码保护完整迁移包。
 
+## v0.9.3 更新
+
+- 修复「连接记录」和「模型鉴别记录」窗口的模型筛选框文字下半截被裁切的问题；筛选逻辑和本地数据格式未改。
+- 提供 Windows x64 自包含单文件 `ProbeDesktop.exe`，双击即可运行，无需另装 .NET。发布页另有源码压缩包；源码压缩包不是可运行程序。
+
 ## v0.9.2 更新
+
+[GitHub 正式发布](https://github.com/Nellako/ProbeDesktop/releases/tag/v0.9.2)，标签指向 `afe3bcc`。下载 Windows x64 自包含单文件 [ProbeDesktop.exe](https://github.com/Nellako/ProbeDesktop/releases/download/v0.9.2/ProbeDesktop.exe) 后直接运行，无需解压；该版本未上传 ZIP 程序包。EXE 的 SHA-256 为 `39cc98180b25dcdbc18fedc0a197378761c804553a31e2c832ba49ef956b1c48`。
 
 - 连接结果显示为成功（绿）、成功（可能）（蓝）、失败（红，含原“结果未知”）。原始记录与错误原因保留，身份识别状态不变。
 - 标记读取显示为通过（绿）、不匹配（蓝）、无法判断和未检验（红）。标记结果不改变连接分类或重试规则。
 - 巡检每个目标每轮最多尝试三次，按本轮已完成的最好结果展示及统计，同级取最新。标记、时间和原因来自同一条代表记录，每次尝试仍独立保留。
 
 ## v0.9.1 更新
+
+[GitHub 发布页](https://github.com/Nellako/ProbeDesktop/releases/tag/v0.9.1) 提供 Windows x64 非安装版 ZIP，解压后运行 `ProbeDesktop.exe`。
 
 - 直连测试使用约 256 token 合成英文文本，在首、中、尾放置三个随机标记，独立显示校验通过、不匹配或无法判断。不保存回答正文或随机标记。
 - Responses 使用 `max_output_tokens=64`，Claude Messages 与 Chat Completions 使用 `max_tokens=64`；直连测试超时为 45 秒。输出限制不是计费上限。

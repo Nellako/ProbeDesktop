@@ -2,13 +2,16 @@
 
 **第一次使用或看不懂新版状态？请先读 [中文使用手册](使用手册.md)**：从“结果 / 标记读取”两列讲起，包含截图解读、单次测试、定时巡检和常见问题处理。
 
-非官方 Windows 桌面客户端，用于管理 AI API 中转站配置、拉取模型列表、直连连接测试，以及调用 BazaarLink 公开 Probe API 进行手动鉴别和身份识别巡检。当前源码版本 **0.9.2**，变更见 [版本说明](RELEASE-NOTES.md)。
+非官方 Windows 桌面客户端，用于管理 AI API 中转站配置、拉取模型列表、直连连接测试，以及调用 BazaarLink 公开 Probe API 进行手动鉴别和身份识别巡检。当前源码版本 **0.9.3**，变更见 [版本说明](RELEASE-NOTES.md)。
 
 支持 OpenAI Responses、Claude Messages、Chat Completions 三种显式协议。无账户体系、无云同步，不自建云后端。第三方判断不是模型真实身份或能力的确定性证明；本软件不提供“降智总分”。
 
 ## 下载与使用
 
-从 [GitHub Releases](https://github.com/Nellako/ProbeDesktop/releases) 下载 Windows x64 发布包，解压后运行 `ProbeDesktop.exe`。自包含单文件包携带 .NET 10 运行时，无需另外安装运行时。程序未签名，可能出现“未知发布者”提示；请核验来源和 SHA-256，不要关闭系统安全保护。
+- **[v0.9.3](https://github.com/Nellako/ProbeDesktop/releases/tag/v0.9.3)** 修复记录窗口筛选框裁字。下载 Windows x64 自包含单文件 [ProbeDesktop.exe](https://github.com/Nellako/ProbeDesktop/releases/download/v0.9.3/ProbeDesktop.exe)，无需安装或另装 .NET；同一发布页提供源码和版本说明。
+- **[v0.9.2](https://github.com/Nellako/ProbeDesktop/releases/tag/v0.9.2)** 已正式发布，标签指向 `afe3bcc`。下载 Windows x64 自包含单文件 [ProbeDesktop.exe](https://github.com/Nellako/ProbeDesktop/releases/download/v0.9.2/ProbeDesktop.exe) 后直接运行，无需解压、安装或另装 .NET 10 运行时。该版本未上传 ZIP 程序包；GitHub 自动生成的源码压缩包不是可运行程序。EXE 的 SHA-256 为 `39cc98180b25dcdbc18fedc0a197378761c804553a31e2c832ba49ef956b1c48`。
+- **[v0.9.1](https://github.com/Nellako/ProbeDesktop/releases/tag/v0.9.1)** 提供 Windows x64 非安装版 ZIP。解压后运行 `ProbeDesktop.exe`，无需另装 .NET 10 运行时。
+- **未签名**：程序可能提示“未知发布者”；请核验来源和 SHA-256，不要关闭系统安全保护。
 
 发布目标为 Windows x64，主要面向 Windows 11 x64；未完整验证 Windows 版本和设备兼容矩阵。未提供 ARM64、Linux 或 macOS 构建。
 
@@ -36,7 +39,7 @@
 
 若 `dotnet` 不在 PATH，向脚本传入 `-Dotnet <SDK可执行文件>`。首次还原和自包含发布可能联网访问官方 NuGet 源下载 SDK 所需组件；自动测试使用隔离目录和模拟 HTTP，不调用真实模型。
 
-发布脚本先构建并运行控制台回归 runner（不是 `dotnet test`），再在 `artifacts/` 生成 EXE、ZIP 和 SHA-256 文件。每次使用新时间戳目录，已有产物不覆盖。产品版本 `0.9.1`，文件和程序集版本 `0.9.1.0`。
+发布脚本先构建并运行控制台回归（不是 `dotnet test`），再在 `artifacts/` 生成本地 EXE、ZIP 和 SHA-256 文件。脚本不会上传构建产物。构建使用新时间戳目录，不覆盖已有产物。产品版本为 `0.9.3`，文件和程序集版本为 `0.9.3.0`。
 
 ## 结构与限制
 
