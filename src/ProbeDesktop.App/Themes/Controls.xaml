@@ -177,7 +177,8 @@
                             <TextBlock x:Name="Placeholder" Grid.Column="1" Text="{TemplateBinding Tag}" Margin="2,0,8,0"
                                        Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Center"
                                        IsHitTestVisible="False" Visibility="Collapsed" TextTrimming="CharacterEllipsis" />
-                            <ScrollViewer x:Name="PART_ContentHost" Grid.Column="1" Margin="0,6,8,6" Focusable="False"
+                            <!-- TextBox.Padding 已作用于 ScrollViewer，此处不再叠加上下留白，否则 36 高工具栏内文字被裁 -->
+                            <ScrollViewer x:Name="PART_ContentHost" Grid.Column="1" Margin="0,0,8,0" Focusable="False"
                                           HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"
                                           VerticalAlignment="Center" />
                         </Grid>
@@ -192,7 +193,7 @@
                         <Trigger Property="IsKeyboardFocused" Value="True">
                             <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
                             <Setter TargetName="Bd" Property="BorderThickness" Value="2" />
-                            <Setter TargetName="PART_ContentHost" Property="Margin" Value="-1,5,7,5" />
+                            <Setter TargetName="PART_ContentHost" Property="Margin" Value="-1,0,7,0" />
                             <Setter TargetName="Placeholder" Property="Margin" Value="1,0,7,0" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
