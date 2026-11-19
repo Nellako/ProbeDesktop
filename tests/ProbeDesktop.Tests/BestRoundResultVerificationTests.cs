@@ -282,10 +282,7 @@ public static class BestRoundResultVerificationTests
         var p = await service.SaveProfileAsync(Fixtures.NewProfile(), Program.Key1);
         handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson("m"));
         p = await service.RefreshModelsAsync(p.Id, Fixtures.ModelConsent(p));
-        await service.SaveInspectionSelectionsAsync([new(p.Id, true, ["m"])]);
-        var snapshot = await service.GetInspectionSnapshotAsync();
-        await service.SaveInspectionSettingsAsync(new() { Enabled = true },
-            new(snapshot.Targets.Select(t => t.Target).ToArray(), 30, DateTimeOffset.UtcNow) { MaxAttempts = 3 });
+        await Fixtures.ConfirmInspectionAsync(service, [new(p.Id, true, ["m"])], enable: true);
         return p;
     }
 

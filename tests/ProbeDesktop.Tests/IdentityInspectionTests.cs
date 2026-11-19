@@ -42,26 +42,18 @@ public static class IdentityInspectionTests
         return await service.RefreshModelsAsync(profile.Id, ModelConsent(profile));
     }
 
-    private static IdentityInspectionConsent ConsentFor(IdentityInspectionSnapshot snapshot, int interval)
-        => new(snapshot.Targets.Where(t => t.Selected).Select(t => t.Target).ToArray(), interval, DateTimeOffset.UtcNow);
-
     /// <summary>Selects every cached model of every profile, then enables with a fresh exact-scope consent.</summary>
     private static async Task<IdentityInspectionSnapshot> EnableAsync(DesktopService service, int interval = 30)
     {
-        IdentityInspectionSnapshot snapshot = await SelectAllAsync(service);
-        return await service.SaveIdentityInspectionSettingsAsync(
-            new IdentityInspectionSettings { Enabled = true, IntervalMinutes = interval }, ConsentFor(snapshot, interval));
+        IdentityInspectionSnapshot snapshot = await service.GetIdentityInspectionSnapshotAsync();
+        return await Fixtures.ConfirmIdentityAsync(service, AllSelections(snapshot), interval, enable: true);
     }
 
-    private static async Task<IdentityInspectionSnapshot> SelectAllAsync(DesktopService service)
-    {
-        IdentityInspectionSnapshot snapshot = await service.GetIdentityInspectionSnapshotAsync();
-        // Targets are one entry per cached model; selection is per profile with its model id list.
-        return await service.SaveIdentityInspectionSelectionsAsync(snapshot.Targets
+    // Targets are one entry per cached model; selection is per profile with its model id list.
+    private static IdentityInspectionSelection[] AllSelections(IdentityInspectionSnapshot snapshot) => snapshot.Targets
             .GroupBy(t => t.Target.ProfileId)
-            .Select(g => new IdentityInspectionSelection(g.Key, g.Any(), g.Select(t => t.Target.ModelId).ToArray()))
-            .ToArray());
-    }
+            .Select(g => new IdentityInspectionSelection(g.Key, true, g.Select(t => t.Target.ModelId).ToArray()))
+            .ToArray();
 
     private static string RunIdOnly(string runId) => $"{{\"runId\":\"{runId}\"}}";
 
@@ -132,7 +124,7 @@ public static class IdentityInspectionTests
         await Check.ThrowsClientAsync(() => service.BeginIdentityInspectionRoundAsync(IdentityInspectionTrigger.Manual),
             "ConsentRequired", "manual round without per-run consent is refused");
         await Check.ThrowsClientAsync(() => service.BeginIdentityInspectionRoundAsync(
-                IdentityInspectionTrigger.Manual, new IdentityInspectionConsent([], 30, DateTimeOffset.UtcNow)),
+                IdentityInspectionTrigger.Manual, Fixtures.ManualIdentityApproval(snapshot)),
             "IdentityNotAuthorized", "manual round with an empty selection is refused even with consent");
         Check.Equal(before, handler.Count, "manual refusal sends nothing");
     }
@@ -145,40 +137,46 @@ public static class IdentityInspectionTests
         var handler = new FakeHttpHandler();
         using var service = New(tmp.Path, handler);
         await SeedAsync(service, handler, "Primary", RelayBase, ["m1", "m2"]);
-        IdentityInspectionSnapshot snapshot = await SelectAllAsync(service);
+        IdentityInspectionSnapshot snapshot = await service.GetIdentityInspectionSnapshotAsync();
+        var draft = AllSelections(snapshot);
         IdentityInspectionTarget[] scope = snapshot.Targets.Select(t => t.Target).ToArray();
         Check.Equal(2, scope.Length, "two cached models are selected");
 
         int before = handler.Count;
-        IdentityInspectionConsent good = new(scope, 30, DateTimeOffset.UtcNow);
-        var cases = new (string Label, IdentityInspectionSettings Settings, IdentityInspectionConsent? Consent)[]
+        IdentityInspectionConsent good = Fixtures.IdentityApproval(snapshot, draft);
+        await Check.ThrowsClientAsync(() => service.SaveIdentityInspectionSettingsAsync(new() { Enabled = true }, good),
+            "ConsentRequired", "toggle cannot adopt even a valid unsubmitted consent");
+        var cases = new (string Label, IdentityInspectionConsent Consent)[]
         {
-            ("enable without consent", new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 }, null),
-            ("empty scope", new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 }, good with { Scope = [] }),
-            ("subset of the target list", new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 },
+            ("empty scope for a nonempty draft", good with { Scope = [] }),
+            ("subset of the target list",
                 good with { Scope = [scope[0]] }),
-            ("duplicate scope entries", new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 },
+            ("duplicate scope entries",
                 good with { Scope = [scope[0], scope[1], scope[0]] }),
-            ("stale consent", new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 },
+            ("stale consent",
                 good with { AcceptedAt = DateTimeOffset.UtcNow.AddMinutes(-30) }),
-            ("future consent", new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 },
+            ("future consent",
                 good with { AcceptedAt = DateTimeOffset.UtcNow.AddMinutes(5) }),
-            ("interval mismatch", new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 45 }, good),
         };
-        foreach (var (label, settings, consent) in cases)
-            await Check.ThrowsClientAsync(() => service.SaveIdentityInspectionSettingsAsync(settings, consent),
+        foreach (var (label, consent) in cases)
+            await Check.ThrowsClientAsync(() => service.ConfirmIdentityInspectionSettingsAsync(draft, consent),
                 "ConsentRequired", label + " is refused");
 
         foreach (int interval in new[] { 9, 481, 0, -30 })
-            await Check.ThrowsClientAsync(() => service.SaveIdentityInspectionIntervalAsync(interval, good),
+            await Check.ThrowsClientAsync(() => service.ConfirmIdentityInspectionSettingsAsync(draft, good with { IntervalMinutes = interval }),
                 "InvalidInterval", "interval " + interval + " is outside 10..480");
 
         Check.Equal(before, handler.Count, "invalid settings never touch the network");
         Check.False((await service.GetIdentityInspectionSnapshotAsync()).Settings.Enabled, "inspection stays disabled");
 
+        var dirty = await service.SaveIdentityInspectionSettingsAsync(new() { Enabled = true, IntervalMinutes = 90 });
+        Check.Equal(30, dirty.Settings.IntervalMinutes, "toggle does not adopt a draft interval");
+        await Check.ThrowsClientAsync(() => service.BeginIdentityInspectionRoundAsync(), "IdentityNotAuthorized", "on switch alone cannot authorize sends");
+        await service.SaveIdentityInspectionSettingsAsync(new() { Enabled = false });
+
         // The valid exact-scope consent enables it.
-        IdentityInspectionSnapshot enabled = await service.SaveIdentityInspectionSettingsAsync(
-            new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 }, good);
+        await service.ConfirmIdentityInspectionSettingsAsync(draft, good);
+        IdentityInspectionSnapshot enabled = await service.SaveIdentityInspectionSettingsAsync(new() { Enabled = true });
         Check.True(enabled.Settings.Enabled, "exact-scope consent enables inspection");
         Check.True(enabled.Targets.All(t => t.Authorized), "the whole selected scope is authorized");
         Check.Equal(before, handler.Count, "enabling sends nothing");
@@ -250,6 +248,10 @@ public static class IdentityInspectionTests
         Check.Equal(3, ended.Completed, "all three attempts completed");
         Check.Equal(0, ended.Skipped, "nothing was skipped");
         Check.Equal(3, ProbeGets(handler), "each attempt used exactly one GET and never re-POSTed");
+        var completed = await service.GetIdentityInspectionSnapshotAsync();
+        Check.Equal(ended.CompletedAt, completed.LastCompletedAt, "fully processed round updates the persisted schedule baseline");
+        await Check.ThrowsClientAsync(() => service.BeginDueIdentityInspectionRoundAsync(), "InspectionNotDue", "due path uses the persisted completion baseline");
+        Check.Equal(3, ProbePosts(handler), "not-due refusal adds no POST");
     }
 
     // V04 -------------------------------------------------------------------
@@ -476,14 +478,20 @@ public static class IdentityInspectionTests
 
     // V08 -------------------------------------------------------------------
     // Manual one-off round: allowed while the automatic switch is off, requires exact per-run consent, and does
-    // not write automatic grants. Manual records never carry the automatic trigger.
+    // only use previously confirmed targets. Manual records never carry the automatic trigger.
     public static async Task V08_ManualRoundUsesPerRunConsentOnly()
     {
         using var tmp = new TempDir();
         var handler = new FakeHttpHandler();
         using var service = New(tmp.Path, handler);
         await SeedAsync(service, handler, "A", RelayBase, ["m1", "m2"]);
-        IdentityInspectionSnapshot snapshot = await SelectAllAsync(service);
+        var unconfirmed = await service.GetIdentityInspectionSnapshotAsync();
+        var draft = AllSelections(unconfirmed);
+        int before = handler.Count;
+        await Check.ThrowsClientAsync(() => service.BeginIdentityInspectionRoundAsync(IdentityInspectionTrigger.Manual,
+            Fixtures.IdentityApproval(unconfirmed, draft)), null, "per-run consent cannot authorize an unconfirmed target");
+        Check.Equal(before, handler.Count, "unconfirmed manual target sends nothing");
+        IdentityInspectionSnapshot snapshot = await Fixtures.ConfirmIdentityAsync(service, draft);
         IdentityInspectionTarget[] scope = snapshot.Targets.Where(t => t.Selected).Select(t => t.Target).ToArray();
         Check.Equal(2, scope.Length, "two models selected");
 
@@ -491,8 +499,10 @@ public static class IdentityInspectionTests
         await Check.ThrowsClientAsync(() => service.BeginIdentityInspectionRoundAsync(IdentityInspectionTrigger.Manual),
             "ConsentRequired", "manual round requires per-run consent");
 
-        IdentityInspectionRoundSummary round = await service.BeginIdentityInspectionRoundAsync(
-            IdentityInspectionTrigger.Manual, new IdentityInspectionConsent(scope, 30, DateTimeOffset.UtcNow));
+        var approval = Fixtures.ManualIdentityApproval(snapshot);
+        await Check.ThrowsClientAsync(() => service.BeginIdentityInspectionRoundAsync(IdentityInspectionTrigger.Manual,
+            approval with { Scope = [scope[0]] }), "ConsentRequired", "manual consent must cover the entire eligible scope");
+        IdentityInspectionRoundSummary round = await service.BeginIdentityInspectionRoundAsync(IdentityInspectionTrigger.Manual, approval);
         Check.Equal(IdentityInspectionTrigger.Manual, round.Trigger, "the manual trigger is persisted");
         Check.NotNull(round.ManualConsentAt, "the per-run consent time is recorded");
         Check.Equal(2, round.Total, "the whole selected scope is frozen");
@@ -504,10 +514,10 @@ public static class IdentityInspectionTests
         Check.Equal(IdentityInspectionTrigger.Manual, step.Probe.IdentityInspectionTrigger,
             "the record keeps the manual trigger so notifications can filter it out");
 
-        // Manual consent never creates an automatic grant: the snapshot must still report nothing authorized.
+        // Manual consent neither creates nor widens the preexisting saved authorization.
         IdentityInspectionSnapshot after = await service.GetIdentityInspectionSnapshotAsync();
-        Check.True(after.Targets.Where(t => t.Selected).All(t => !t.Authorized),
-            "a manual round never writes automatic authorization");
+        Check.Equal(snapshot.SettingsRevision, after.SettingsRevision, "a manual round does not revise confirmed settings");
+        Check.Equal(2, after.Targets.Count(t => t.Selected && t.Authorized), "the original saved grant remains unchanged");
         Check.False(after.Settings.Enabled, "a manual round never enables the automatic switch");
     }
 
@@ -519,12 +529,10 @@ public static class IdentityInspectionTests
         var handler = new FakeHttpHandler();
         using var service = New(tmp.Path, handler);
         RelayProfile profile = await SeedAsync(service, handler, "A", RelayBase, ["m1", "m2", "m3"]);
-        IdentityInspectionSnapshot snapshot = await SelectAllAsync(service);
+        IdentityInspectionSnapshot snapshot = await EnableAsync(service);
         Check.Equal(3, snapshot.Selections.Single().SelectedModelIds.Count, "all three models selected");
 
-        IdentityInspectionSnapshot enabled = await service.SaveIdentityInspectionSettingsAsync(
-            new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 }, ConsentFor(snapshot, 30));
-        Check.True(enabled.Targets.All(t => t.Authorized), "all three authorized");
+        Check.True(snapshot.Targets.All(t => t.Authorized), "all three authorized");
 
         // A cache refresh that drops m3 must intersect the selection and revoke m3's grant.
         handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson("m1", "m2"));
@@ -536,7 +544,7 @@ public static class IdentityInspectionTests
         Check.True(afterRefresh.Targets.All(t => t.Authorized), "the surviving models keep their exact grants");
 
         // Deselecting a model revokes its grant immediately.
-        IdentityInspectionSnapshot narrowed = await service.SaveIdentityInspectionSelectionsAsync(
+        IdentityInspectionSnapshot narrowed = await Fixtures.ConfirmIdentityAsync(service,
             [new IdentityInspectionSelection(profile.Id, true, ["m1"])]);
         IdentityInspectionTargetStatus m2 = narrowed.Targets.Single(t => t.Target.ModelId == "m2");
         Check.False(m2.Selected, "m2 is deselected");
@@ -561,6 +569,48 @@ public static class IdentityInspectionTests
 
     // V10 -------------------------------------------------------------------
     // A credential/address/protocol revision invalidates the target: the round skips it and does not send.
+    public static async Task ConfigurationRoundTripNeverRevivesQueuedTarget()
+    {
+        using var tmp = new TempDir();
+        var handler = new FakeHttpHandler();
+        using var service = New(tmp.Path, handler);
+        await SeedAsync(service, handler, "First", RelayBase, ["first"]);
+        RelayProfile queued = await SeedAsync(service, handler, "Queued", Relay2, ["queued"]);
+        await EnableAsync(service);
+        var round = await service.BeginDueIdentityInspectionRoundAsync();
+        var moved = await service.SaveProfileAsync(queued with { BaseUrl = RelayBase }, null);
+        queued = await service.SaveProfileAsync(moved with { BaseUrl = Relay2 }, null);
+        handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson("queued"));
+        await service.RefreshModelsAsync(queued.Id, ModelConsent(queued));
+        var confirmed = await EnableAsync(service); // Does not restore permission for an old round.
+        handler.EnqueueJson(HttpStatusCode.OK, CompletedJson("unaffected-run"));
+        await service.TrySubmitNextIdentityInspectionTargetAsync(round.RoundId);
+        var step = await service.TrySubmitNextIdentityInspectionTargetAsync(round.RoundId);
+        Check.Equal(IdentityInspectionAttemptState.Skipped, step.Round.Attempts.Single(a => a.Target.ModelId == "queued").State, "edited target remains skipped");
+        Check.Equal("first", RequestModel(handler.Requests.Single(r => r.Method == "POST")), "no POST containing the edited target or its key");
+        Check.Equal("first", (await service.GetHistoryAsync()).Single().ModelId, "only the dispatched task enters history");
+        await service.EndIdentityInspectionRoundAsync(round.RoundId);
+        var next = await service.BeginIdentityInspectionRoundAsync(IdentityInspectionTrigger.Manual, Fixtures.ManualIdentityApproval(confirmed));
+        Check.True(next.Attempts.Any(a => a.Target.ModelId == "queued"), "the new round can use the fresh authorization");
+    }
+
+    public static async Task FinalGateCancellationIsNotAnIdentityFailure()
+    {
+        using var tmp = new TempDir();
+        using var cancellation = new CancellationTokenSource();
+        var handler = new FakeHttpHandler();
+        using var service = New(tmp.Path, handler, new CancelBeforeDispatchProtector(cancellation, "history", "state", "Submitting"));
+        await SeedAsync(service, handler, "First", RelayBase, ["first"]);
+        await EnableAsync(service);
+        var round = await service.BeginDueIdentityInspectionRoundAsync();
+        var step = await service.TrySubmitNextIdentityInspectionTargetAsync(round.RoundId, cancellation.Token);
+        Check.True(cancellation.IsCancellationRequested, "the final gate read the persisted submission intent");
+        Check.Equal(IdentityInspectionAttemptState.Skipped, step.Round.Attempts.Single().State, "the intent never dispatched");
+        Check.Null(step.Probe, "no failed task for the row or the automatic notifier");
+        Check.Equal(0, (await service.GetHistoryAsync()).Count, "confirmed unsent prewrite is not in history");
+        Check.Equal(0, ProbePosts(handler), "neither the target nor its key were sent");
+    }
+
     public static async Task V10_RevisionChangeSkipsTargetWithoutSending()
     {
         using var tmp = new TempDir();
@@ -685,26 +735,20 @@ public static class IdentityInspectionTests
         var handler = new FakeHttpHandler();
         using var service = New(tmp.Path, handler);
         await SeedAsync(service, handler, "A", RelayBase, ["m1"]);
-        IdentityInspectionSnapshot snapshot = await SelectAllAsync(service);
-        await service.SaveIdentityInspectionSettingsAsync(
-            new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 30 }, ConsentFor(snapshot, 30));
+        IdentityInspectionSnapshot snapshot = await EnableAsync(service);
 
         // Turning off and changing the interval must not let the old 30-minute grant re-enable a 60-minute plan.
         await service.SaveIdentityInspectionSettingsAsync(new IdentityInspectionSettings { Enabled = false, IntervalMinutes = 30 });
-        await service.SaveIdentityInspectionIntervalAsync(60);
-        IdentityInspectionSnapshot offAt60 = await service.GetIdentityInspectionSnapshotAsync();
-        Check.Equal(60, offAt60.Settings.IntervalMinutes, "the new interval is saved");
-        Check.True(offAt60.Targets.All(t => !t.Authorized), "the old 30-minute grant is not valid for the new interval");
-
-        await Check.ThrowsClientAsync(() => service.SaveIdentityInspectionSettingsAsync(
-                new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 60 }),
-            "ConsentRequired", "re-enabling at a new interval needs a fresh consent");
+        await Check.ThrowsClientAsync(() => service.SaveIdentityInspectionIntervalAsync(60), null,
+            "legacy interval-only write cannot change the plan");
+        IdentityInspectionSnapshot unchanged = await service.GetIdentityInspectionSnapshotAsync();
+        Check.Equal(30, unchanged.Settings.IntervalMinutes, "failed confirmation keeps the 30-minute interval");
+        Check.True(unchanged.Targets.All(t => t.Authorized), "existing 30-minute grant is not invalidated");
 
         // A fresh consent at the new interval works.
-        IdentityInspectionSnapshot fresh = await service.GetIdentityInspectionSnapshotAsync();
-        IdentityInspectionSnapshot enabled = await service.SaveIdentityInspectionSettingsAsync(
-            new IdentityInspectionSettings { Enabled = true, IntervalMinutes = 60 }, ConsentFor(fresh, 60));
+        IdentityInspectionSnapshot enabled = await Fixtures.ConfirmIdentityAsync(service, snapshot.Selections, 60, enable: true);
         Check.True(enabled.Settings.Enabled, "fresh consent re-enables at the new interval");
+        Check.Equal(60, enabled.Settings.IntervalMinutes, "fresh consent commits new interval");
         Check.True(enabled.Targets.All(t => t.Authorized), "the fresh grant covers the new interval");
     }
 

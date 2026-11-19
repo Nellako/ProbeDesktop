@@ -11,7 +11,7 @@ public sealed record FactRow(string Label, string Value);
 
 public sealed record ItemRow(
     string Group, string Label, string ProbeId, string StatusText, string PassedText,
-    string Detail, string DurationText, string TokensText);
+    string DurationText, string TokensText);
 
 public sealed record WarningRow(string Label, string SeverityText, string Severity, string Evidence);
 
@@ -53,10 +53,28 @@ public sealed class ProbeRecordViewModel : ObservableObject
     public string SourceText => Format.ProbeSourceText(_record);
     public string? RemoteRunId => _record.RemoteRunId;
     public string? ReportUrl => _record.ReportUrl;
-    public string? Error => string.IsNullOrWhiteSpace(_record.Error) ? null : _record.Error;
+    public string? Error => HasServiceError(_record) || string.IsNullOrWhiteSpace(_record.Error) ? null : _record.Error;
     public string IdentityText => Format.IdentityText(_record.IdentityStatus);
     public string VerdictText => Format.VerdictText(_record.VerdictStatus);
     public string InferredModelText => Format.Text(_record.InferredModel);
+
+    /// <summary>是否已有服务给出的身份结论（外层或详细）。</summary>
+    public bool HasVerdict => !string.IsNullOrEmpty(_record.VerdictStatus) || !string.IsNullOrEmpty(_record.IdentityStatus);
+
+    /// <summary>身份结论的一句话标题：优先详细判定，其次外层判断。</summary>
+    public string VerdictHeadline => !string.IsNullOrEmpty(_record.VerdictStatus)
+        ? Format.VerdictText(_record.VerdictStatus)
+        : !string.IsNullOrEmpty(_record.IdentityStatus) ? "外层判断：" + Format.IdentityText(_record.IdentityStatus) : "";
+
+    public string VerdictExplanation => Format.VerdictExplanation(_record.VerdictStatus, _record.InferredModel);
+    public string VerdictTone => Format.VerdictTone(_record.VerdictStatus);
+
+    /// <summary>
+    /// 给巡检页用的身份摘要：详细判定优先，否则外层判断（仅家族）。与行为警示、任务状态分开。
+    /// </summary>
+    public string IdentitySummaryText => !string.IsNullOrEmpty(_record.VerdictStatus)
+        ? Format.VerdictText(_record.VerdictStatus)
+        : !string.IsNullOrEmpty(_record.IdentityStatus) ? Format.IdentityText(_record.IdentityStatus) + "（仅家族）" : "—";
     public string Title => $"{_record.ProfileName} · {_record.ModelId}";
 
     public bool IsTerminal => Format.IsTerminal(_record.State);
@@ -104,7 +122,6 @@ public sealed class ProbeRecordViewModel : ObservableObject
     }
 
     public string ProgressText { get; private set; } = "";
-    public string PhaseText { get; private set; } = "";
     public bool HasItemTotal { get; private set; }
     public int ItemsDone { get; private set; }
     public int ItemsTotal { get; private set; }
@@ -115,6 +132,7 @@ public sealed class ProbeRecordViewModel : ObservableObject
 
     public ObservableCollection<FactRow> Facts { get; } = [];
     public ObservableCollection<FactRow> VerdictFacts { get; } = [];
+    public ObservableCollection<FactRow> TechnicalFacts { get; } = [];
     public ObservableCollection<string> Reasoning { get; } = [];
     public ObservableCollection<WarningRow> Warnings { get; } = [];
     public ObservableCollection<ItemRow> Items { get; } = [];
@@ -157,7 +175,6 @@ public sealed class ProbeRecordViewModel : ObservableObject
                     item.ProbeId,
                     Format.ItemStatusText(item.Status),
                     Format.PassedText(item.Passed),
-                    item.Detail ?? "",
                     item.DurationMs is { } ms ? $"{ms / 1000.0:0.0} 秒" : "—",
                     item.InputTokens is null && item.OutputTokens is null
                         ? "—"
@@ -190,7 +207,6 @@ public sealed class ProbeRecordViewModel : ObservableObject
         ProgressText = HasItemTotal
             ? $"检测项 {ItemsDone} / {ItemsTotal} 已结束"
             : IsTerminal ? "无检测项数据" : "尚未返回检测项";
-        PhaseText = string.IsNullOrWhiteSpace(r.Phase) ? "" : $"阶段：{r.Phase}";
         TokensText = r.TotalInputTokens is null && r.TotalOutputTokens is null
             ? "—"
             : $"输入 {Format.Number(r.TotalInputTokens)} / 输出 {Format.Number(r.TotalOutputTokens)}";
@@ -207,7 +223,6 @@ public sealed class ProbeRecordViewModel : ObservableObject
         Facts.Add(new FactRow("调用模型", r.ModelId));
         Facts.Add(new FactRow("声明模型", Format.Text(r.ClaimedModel, "未声明")));
         Facts.Add(new FactRow("远端任务标识", Format.Text(r.RemoteRunId, "无")));
-        Facts.Add(new FactRow("远端状态", Format.Text(r.RemoteStatus)));
         Facts.Add(new FactRow("确认发送时间", Format.Time(r.ConsentAt)));
         Facts.Add(new FactRow("本地创建时间", Format.Time(r.CreatedAt)));
         Facts.Add(new FactRow("完成时间", Format.Time(r.CompletedAt)));
@@ -215,13 +230,43 @@ public sealed class ProbeRecordViewModel : ObservableObject
         Facts.Add(new FactRow("Token 合计", TokensText));
         Facts.Add(new FactRow("本地记录 ID", r.LocalId.ToString()));
 
+        // 只展示服务实际返回的家族/型号（verdict.trueFamily / trueModel），不用 predictedCandidates 或声明模型去猜。
+        var submodelMismatch = r.VerdictStatus == "clean_match_submodel_mismatch";
         VerdictFacts.Clear();
-        VerdictFacts.Add(new FactRow("身份判断（外层）", Format.IdentityText(r.IdentityStatus)));
-        VerdictFacts.Add(new FactRow("详细结论", Format.VerdictText(r.VerdictStatus)));
-        VerdictFacts.Add(new FactRow("推测模型家族", Format.Text(r.InferredFamily)));
-        VerdictFacts.Add(new FactRow("推测模型", Format.Text(r.InferredModel)));
-        VerdictFacts.Add(new FactRow("置信度（服务给出）", Format.Text(r.Confidence)));
+        VerdictFacts.Add(new FactRow("声明模型", Format.Text(r.ClaimedModel, "未声明")));
+        VerdictFacts.Add(new FactRow("服务判断的模型家族", Format.Text(r.InferredFamily, "服务未给出")));
+        VerdictFacts.Add(new FactRow("服务判断的实际型号",
+            !string.IsNullOrWhiteSpace(r.InferredModel) ? r.InferredModel!
+            : submodelMismatch ? "未知（服务未确认实际型号）" : "服务未给出"));
+        VerdictFacts.Add(new FactRow("本次证据强度", Format.EvidenceStrengthText(r.Confidence)));
+        VerdictFacts.Add(new FactRow("外层判断（仅家族）", Format.IdentityText(r.IdentityStatus)));
+
+        // Compare displayed values, not timestamps or the polling snapshot's object identity.
+        List<FactRow> details =
+        [
+            new("外层状态码", Format.Text(r.IdentityStatus)),
+            new("详细判定码", Format.Text(r.VerdictStatus)),
+            new("服务给出的 confidence 原值", Format.Text(r.Confidence)),
+            new("远端状态", Format.Text(r.RemoteStatus)),
+            new("本地状态", r.State.ToString())
+        ];
+        if (!string.IsNullOrWhiteSpace(r.Phase)) details.Add(new FactRow("服务阶段", r.Phase));
+        if (HasServiceError(r)) details.Add(new FactRow("服务任务诊断", r.Error!));
+        foreach (var item in r.Items)
+            if (!string.IsNullOrWhiteSpace(item.Detail))
+                details.Add(new FactRow($"检测项：{Format.Text(item.Label, item.ProbeId)}", item.Detail));
+        if (!TechnicalFacts.SequenceEqual(details))
+        {
+            TechnicalFacts.Clear();
+            foreach (var detail in details) TechnicalFacts.Add(detail);
+        }
     }
+
+    // The adapter stores run.error on an accepted remote state. Local query/recovery errors use
+    // separate states, even when the last known remote status is still present on the record.
+    private static bool HasServiceError(ProbeRecord r) => !string.IsNullOrWhiteSpace(r.Error) && (r.State, r.RemoteStatus) is
+        (LocalRunState.Running, "running") or (LocalRunState.Completed, "completed") or
+        (LocalRunState.Failed, "failed") or (LocalRunState.Aborted, "aborted");
 
     private static void CopyText(string? text)
     {

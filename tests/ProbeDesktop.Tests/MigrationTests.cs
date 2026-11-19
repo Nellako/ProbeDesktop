@@ -103,7 +103,7 @@ public static class MigrationTests
         await Check.ThrowsClientAsync(() => wrongDevice.GetProfilesAsync(), "StorageRead", "old device protector cannot decrypt target");
         using var reopened = Service(target, newProtector); _ = await reopened.GetProfilesAsync();
         var snapshot = await reopened.GetIdentityInspectionSnapshotAsync();
-        var consent = new IdentityInspectionConsent(snapshot.Targets.Where(t => t.Selected).Select(t => t.Target).ToArray(), 50, DateTimeOffset.UtcNow);
+        var consent = Fixtures.ManualIdentityApproval(snapshot);
         await Check.ThrowsClientAsync(() => reopened.BeginIdentityInspectionRoundAsync(IdentityInspectionTrigger.Manual, consent), "ActiveRun", "imported active task blocks new POST");
     }
 

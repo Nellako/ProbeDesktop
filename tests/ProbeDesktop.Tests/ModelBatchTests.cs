@@ -18,7 +18,7 @@ public static class ModelBatchTests
             handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson("old"));
             profiles.Add(await service.RefreshModelsAsync(profile.Id, Consent(profile)));
         }
-        await service.SaveInspectionSelectionsAsync(profiles.Select(p => new InspectionSelection(p.Id, true, ["old"])).ToArray());
+        await Fixtures.ConfirmInspectionAsync(service, profiles.Select(p => new InspectionSelection(p.Id, true, ["old"])).ToArray());
         var baselineRequests = handler.Count;
         handler.EnqueueStatus(HttpStatusCode.ServiceUnavailable);
         handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson());

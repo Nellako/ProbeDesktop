@@ -70,6 +70,7 @@ public static class Program
             ("MV05", "Verifier: import sets the restart barrier immediately; committed state durable, no network", MigrationVerificationTests.PostCommitBarrierAndDurability),
             ("MV06", "Verifier: schema 3 written, schema 2 still loads, out-of-range schema rejected", MigrationVerificationTests.SchemaEnvelopeBehaviour),
             ("IR01", "Inspection bounded retries and final-only counters", InspectionRetryTests.BoundedAttemptsAndFinalResults),
+            ("IR08", "Confirmed zero, one and two retries survive restart", InspectionRetryTests.ConfirmedRetryChoicesPersist),
             ("IR02", "Committed result survives cancellation at attempt boundaries", InspectionRetryTests.CompletedAttemptSurvivesCancellation),
             ("IR04", "Selection, key and authorization changes stop retries", InspectionRetryTests.ChangedScopeStopsRetries),
             ("IR03", "Legacy one-attempt authorization requires explicit upgrade", InspectionRetryTests.LegacyAuthorizationRequiresFreshConsent),
@@ -154,13 +155,16 @@ public static class Program
             ("B02", "Model cache time wording is neutral and never claims a network fetch", ModelBatchTests.B02_CacheTimeWordingIsNeutral),
             ("R03", "Completed result ordering, newest failure, target isolation and original timestamps", LatestResultsTests.R03_CompletionOrderingAndIsolation),
             ("S01", "App interval defaults and integer bounds", AppSchedulerTests.S01_IntervalValidation),
-            ("S02", "App waiting deadline resets from save time", AppSchedulerTests.S02_WaitResetUsesSaveTime),
-            ("S03", "App in-flight interval save keeps absolute deadline", AppSchedulerTests.S03_SaveDuringRoundUsesAbsoluteDue),
-            ("S04", "App overdue saved deadline coalesces once without overlap", AppSchedulerTests.S04_OverdueSaveCoalescesOnce),
+            ("S02", "App confirmed interval uses persisted completion, not save time", AppSchedulerTests.S02_ConfirmedIntervalUsesPersistedCompletion),
+            ("S03", "App in-flight save waits from actual round completion", AppSchedulerTests.S03_SaveDuringRoundUsesAbsoluteDue),
+            ("S04", "App overdue in-flight deadline never overlaps or queues a second round", AppSchedulerTests.S04_OverdueSaveCoalescesOnce),
             ("S05", "App explicit stop cancels round but invalid save does not", AppSchedulerTests.S05_StopCancelsButInvalidSaveDoesNot),
+            ("S06", "App fake-clock restart, eligibility, busy and host cooldown", AppSchedulerTests.S06_RestartHostCooldownAndEligibility),
             ("R02", "Interval save with fresh consent leaves in-flight round intact", SelectionRequirementTests.R02_IntervalSaveKeepsInflightRound),
             ("R04", "Off-state scope confirm stores grants without enabling or sending", SelectionRequirementTests.R04_OffStateScopeConfirmGrantsWithoutEnabling),
             ("R05", "Same-interval scope confirm keeps in-flight round intact", SelectionRequirementTests.R05_SameIntervalConfirmKeepsInflightRound),
+            ("R06", "Both confirmations are atomic across write failure, restart and stale dialogs", SelectionRequirementTests.R06_AtomicConfirmationFailureAndStaleDraft),
+            ("R07", "Detailed identity verdict and optional reasoning survive storage without fabricated diagnosis", IdentityVerdictDisclosureSurvivesStorage),
             ("R01", "Selection persistence, interval isolation, cache intersections, latest completed results", SelectionRequirementTests.R01_ExplicitSelectionsIntervalAndLatestResults),
             ("I01", "Inspection defaults off/30min, pending approval, no auto run", InspectionTests.I01_DefaultsAndNoAutoRun),
             ("I02", "Enable/interval need fresh exact-scope consent, zero requests", InspectionTests.I02_ConsentGatingAndExactScope),
@@ -170,6 +174,9 @@ public static class Program
             ("I06", "Disable persists, blocks timer round, manual round still allowed", InspectionTests.I06_DisablePersistsAndManualRoundStillWorks),
             ("I07", "Disable during round cancels queue, no second request", InspectionTests.I07_DisableDuringRoundStopsQueue),
             ("I08", "401 pause / 429 host cooldown / others continue, no retry or bypass", InspectionTests.I08_HttpErrorsPauseCooldownNoBypass),
+            ("I16", "Connection: editing and restoring a queued target does not revive it", InspectionTests.ConfigurationRoundTripNeverRevivesQueuedTarget),
+            ("I17", "Connection: all hosts cooling down preserves the last round and store bytes", InspectionTests.AllCoolingTargetsKeepPreviousRound),
+            ("I18", "Connection: blocked final gate never writes a failed result", InspectionTests.FinalGateCancellationIsNotAConnectionFailure),
             ("I09", "Connection history fields, Probe isolation, redacted export, delete", InspectionTests.I09_HistoryFieldsIsolationExportDelete),
             ("I10", "Completion never resurrects a record deleted mid-flight", InspectionTests.I10_NoHistoryResurrectionOnCompletion),
             ("I11", "Short store lock, RoundBusy, completion keeps concurrent config", InspectionTests.I11_ConcurrencyQueriesResponsiveRoundBusyConfigKept),
@@ -189,6 +196,8 @@ public static class Program
             ("ID08", "Identity: manual round uses per-run consent, never writes automatic grants", IdentityInspectionTests.V08_ManualRoundUsesPerRunConsentOnly),
             ("ID09", "Identity: selection persistence, cache intersection, grant revocation", IdentityInspectionTests.V09_SelectionPersistenceAndCacheIntersection),
             ("ID10", "Identity: credential revision change skips target without sending", IdentityInspectionTests.V10_RevisionChangeSkipsTargetWithoutSending),
+            ("ID16", "Identity: editing and restoring a queued target does not revive it", IdentityInspectionTests.ConfigurationRoundTripNeverRevivesQueuedTarget),
+            ("ID17", "Identity: blocked final gate never writes a failed run", IdentityInspectionTests.FinalGateCancellationIsNotAnIdentityFailure),
             ("ID11", "Notification: two independent switches persisted, no network", IdentityInspectionTests.V11_NotificationSwitchesPersisted),
             ("ID12", "Notification: automatic-only, per-target dedup, unknown not recovery, stale target rejected", IdentityInspectionTests.V12_NotificationDedupAndRevisionIsolation),
             ("ID13", "Identity: interval bound to grant, off-state change cannot re-enable old grant", IdentityInspectionTests.V13_IntervalBoundToGrant),
@@ -1020,6 +1029,9 @@ public static class Program
         using var service = NewService(tmp.Path, handler);
         var profile = await service.SaveProfileAsync(Fixtures.NewProfile(), Key1);
         var good = Fixtures.ProbeConsent(profile, "model-a");
+        _ = await service.GetHistoryAsync(); // Include any one-time local store migration in the starting snapshot.
+        byte[] before = File.ReadAllBytes(PrimaryPath(tmp.Path));
+        byte[]? backupBefore = File.Exists(BackupPath(tmp.Path)) ? File.ReadAllBytes(BackupPath(tmp.Path)) : null;
 
         foreach (var (label, consent) in new (string, OutboundConsent?)[]
                  {
@@ -1041,7 +1053,9 @@ public static class Program
         }
         Check.Equal(0, handler.Count, "no network request for any invalid consent");
         Check.Equal(0, (await service.GetHistoryAsync()).Count, "invalid consent creates no history record");
-        Check.False(File.Exists(BackupPath(tmp.Path)), "no probe record committed to store");
+        Check.True(before.SequenceEqual(File.ReadAllBytes(PrimaryPath(tmp.Path))), "invalid consent never modifies primary store bytes");
+        Check.True(backupBefore is null ? !File.Exists(BackupPath(tmp.Path)) :
+            backupBefore.SequenceEqual(File.ReadAllBytes(BackupPath(tmp.Path))), "invalid consent does not create or rewrite a backup");
     }
 
     // --seed-inspection-ui --------------------------------------------------
@@ -1113,12 +1127,8 @@ public static class Program
 
         // Approval is recorded for the seeded scope, but the switch stays OFF: no timer can start.
         InspectionSnapshot snapshot = await service.GetInspectionSnapshotAsync();
-        snapshot = await service.SaveInspectionSelectionsAsync(snapshot.Targets.Select(t =>
-            new InspectionSelection(t.Target.ProfileId, t.Target.Models.Count > 0, t.Target.Models)).ToArray());
-        InspectionConsent consent = new(
-            snapshot.Targets.Where(t => t.Target.Models.Count > 0).Select(t => t.Target).ToArray(),
-            snapshot.Settings.IntervalMinutes, DateTimeOffset.UtcNow) { MaxAttempts = 3 };
-        await service.SaveInspectionSettingsAsync(new InspectionSettings { Enabled = false, IntervalMinutes = 30 }, consent);
+        await Fixtures.ConfirmInspectionAsync(service, snapshot.Targets.Select(t =>
+            new InspectionSelection(t.Target.ProfileId, t.Target.Models.Count > 0, t.Target.Models)).ToArray(), attempts: 1);
 
         // One manual round, then manual single tests that end in a clean answer, a 404 and a 429.
         // Terminal states only, and no 401 so the seeded profiles stay authorized for the reviewer.
@@ -1162,7 +1172,10 @@ public static class Program
         Console.WriteLine("REQUESTS=" + handler.Count + " ALL_FAKE_HOSTS=" +
             handler.Requests.All(q => q.Uri.Host.EndsWith(".example.com", StringComparison.OrdinalIgnoreCase)));
 
-        bool ok = !finalSnapshot.Settings.Enabled && history.Count >= 4 && history.All(r => r.CompletedAt is not null)
+        bool ok = !finalSnapshot.Settings.Enabled && finalSnapshot.Settings.MaxRetries == 0
+            && history.Count(r => r.Source == ConnectionRecordSource.RoundManual) == 4
+            && history.Count(r => r.Source == ConnectionRecordSource.Manual) == 3
+            && history.Count == 7 && handler.Count == 10 && history.All(r => r.CompletedAt is not null)
             && (await service.GetHistoryAsync()).Count == 0 && noPlaintext && empty.Models.Count == 0;
         Console.WriteLine(ok ? "SEED_INSPECTION_UI=OK" : "SEED_INSPECTION_UI=FAILED");
         return ok ? 0 : 1;
@@ -1170,16 +1183,76 @@ public static class Program
 
     // --seed-identity-ui -----------------------------------------------------
     // Isolated store for manual identity-inspection UI review: real DPAPI, FakeHttpHandler only, new empty directory.
-    // Automatic switch stays OFF and no automatic grant is written, so a reviewer can never trigger a scheduled round.
+    // Automatic switch stays OFF; the selected targets are explicitly confirmed for the seeded manual round.
     // One completed MANUAL round provides terminal records only; no Running/PollingInterrupted/Expired record is seeded.
-    private static string IdentityVerdictJson(string runId, string verdict, string trueModel, string trueFamily)
+    private static string IdentityVerdictJson(string runId, string model)
         => $$$"""
         {"runId":"{{{runId}}}","status":"completed",
-         "identityAssessment":{"status":"match","verdict":{"status":"{{{verdict}}}","trueFamily":"{{{trueFamily}}}","trueModel":"{{{trueModel}}}","confidence":"0.9",
-           "reasoning":["模拟数据，仅用于界面验收：本结果仅就本次样本给出概率性判断。"]}},
-         "items":[{"probeId":"p1","label":"基础指令遵循","status":"done","passed":true,"durationMs":800,"inputTokens":60,"outputTokens":40}],
+         "identityAssessment":{{{IdentityAssessmentJson(model)}}},
+         "analysisPhase":{"status":"completed"},
+         "items":[{"probeId":"p1","label":"基础指令遵循","status":"done","passed":true,"passReason":"模拟诊断原文：服务确认该项通过。","durationMs":800,"inputTokens":60,"outputTokens":40}],
          "completedAt":{{{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}}
         """;
+
+    private static string IdentityAssessmentJson(string model) => model switch
+    {
+        "gpt-4o" => """
+            {"status":"match","verdict":{"status":"clean_match_family_only","trueFamily":"gpt","trueModel":null,"confidence":"high",
+             "reasoning":"模拟数据，仅用于界面验收：样本支持声明家族，但不足以确定型号。"},
+             "warnings":[{"type":"behavior","label":"模拟行为警示","severity":"warning","evidence":"模拟数据：服务另报行为信号异常，不改变家族判断。"}]}
+            """,
+        "gpt-4o-mini" => """
+            {"status":"mismatch","verdict":{"status":"clean_match_submodel_mismatch","trueFamily":"gpt","trueModel":null,"confidence":"low",
+             "reasoning":"模拟数据，仅用于界面验收：家族相符，但样本不支持声明型号；不推断其他型号。"}}
+            """,
+        _ => """
+            {"status":"uncertain","reasoning":"模拟数据，仅用于界面验收：服务未提供详细状态码或分项诊断。"}
+            """
+    };
+
+    private static async Task IdentityVerdictDisclosureSurvivesStorage()
+    {
+        using var tmp = new TempDir();
+        var handler = new FakeHttpHandler();
+        using var service = NewService(tmp.Path, handler);
+        var profile = await service.SaveProfileAsync(Fixtures.NewProfile(), Key1);
+        var models = new[] { "gpt-4o", "gpt-4o-mini", "claude-3-7-sonnet-20250219" };
+        for (int n = 0; n < models.Length; n++)
+        {
+            string model = models[n];
+            string remoteId = "identity-detail-" + n;
+            handler.EnqueueJson(HttpStatusCode.OK, Fixtures.RunIdOnly(remoteId));
+            handler.EnqueueJson(HttpStatusCode.OK, IdentityVerdictJson(remoteId, model));
+            var started = await service.StartProbeAsync(profile.Id, model, null, Fixtures.ProbeConsent(profile, model));
+            var completed = await service.PollProbeAsync(started.LocalId);
+            Check.Equal(LocalRunState.Completed, completed.State, "the fake response is structurally compatible");
+        }
+
+        var restartHandler = new FakeHttpHandler();
+        using var reloaded = NewService(tmp.Path, restartHandler);
+        var history = await reloaded.GetHistoryAsync();
+        Check.Equal(models.Length, history.Count, "all three distinct samples persist");
+        var family = history.Single(r => r.ModelId == "gpt-4o");
+        Check.Equal("clean_match_family_only", family.VerdictStatus, "family-only code remains exact");
+        Check.Equal("high", family.Confidence, "confidence is independently preserved");
+        Check.Equal("模拟行为警示", family.Warnings.Single().Label, "behavior warning coexists with the family result");
+        Check.Null(family.InferredModel, "family-only result does not invent a model");
+        var mismatch = history.Single(r => r.ModelId == "gpt-4o-mini");
+        Check.Equal("clean_match_submodel_mismatch", mismatch.VerdictStatus, "known long verdict code is not mistaken for a token and redacted");
+        Check.Equal("low", mismatch.Confidence, "low confidence remains a label");
+        Check.Equal("gpt", mismatch.InferredFamily, "the reported family is preserved");
+        Check.Null(mismatch.InferredModel, "same-family mismatch does not invent a model");
+        var uncertain = history.Single(r => r.ModelId == models[2]);
+        Check.Equal("uncertain", uncertain.IdentityStatus, "the coarse assessment is preserved without guessing details");
+        Check.Null(uncertain.VerdictStatus, "missing detailed code is not invented");
+        Check.Null(uncertain.Confidence, "missing confidence is not invented");
+        Check.Null(uncertain.InferredFamily, "missing family is not invented");
+        Check.Null(uncertain.InferredModel, "missing model is not invented");
+        Check.Equal("模拟数据，仅用于界面验收：服务未提供详细状态码或分项诊断。", uncertain.Reasoning.Single(), "reasoning string is preserved verbatim");
+        Check.Equal(0, uncertain.Warnings.Count, "missing diagnostic is not invented");
+        Check.Equal(6, handler.Count, "the fake transport used one POST and one GET per sample");
+        Check.Equal(0, restartHandler.Count, "reopening records does not call a service");
+    }
 
     private static async Task<int> SeedIdentityUiAsync(string directory)
     {
@@ -1220,23 +1293,22 @@ public static class Program
             new RelayProfile { Name = "身份巡检示例 Claude", BaseUrl = "https://relay-b.example.com/v1", Protocol = ApiProtocol.AnthropicMessages }, key2);
         claude = await service.RefreshModelsAsync(claude.Id, SeedModelConsent(claude));
 
-        // Select every cached model, but leave the automatic switch off and write no automatic grant.
+        // Confirm the selected targets, but leave the automatic switch off.
         IdentityInspectionSnapshot snapshot = await service.GetIdentityInspectionSnapshotAsync();
-        snapshot = await service.SaveIdentityInspectionSelectionsAsync(snapshot.Targets
+        snapshot = await Fixtures.ConfirmIdentityAsync(service, snapshot.Targets
             .GroupBy(t => t.Target.ProfileId)
             .Select(g => new IdentityInspectionSelection(g.Key, true, g.Select(t => t.Target.ModelId).ToArray()))
             .ToArray());
-        IdentityInspectionTarget[] scope = snapshot.Targets.Where(t => t.Selected).Select(t => t.Target).ToArray();
+        IdentityInspectionConsent consent = Fixtures.ManualIdentityApproval(snapshot);
 
         // One manual round over the exact selected scope; every attempt reaches a terminal state via the shared poll path.
         IdentityInspectionRoundSummary round = await service.BeginIdentityInspectionRoundAsync(
-            IdentityInspectionTrigger.Manual, new IdentityInspectionConsent(scope, 30, DateTimeOffset.UtcNow));
-        string[] verdicts = ["clean_match", "plain_mismatch", "spoof_behavior_induced"];
-        for (int i = 0; i < scope.Length; i++)
+            IdentityInspectionTrigger.Manual, consent);
+        for (int i = 0; i < consent.Scope.Count; i++)
         {
             string runId = "run-identity-" + (i + 1);
             handler.EnqueueJson(HttpStatusCode.OK, Fixtures.RunIdOnly(runId));
-            handler.EnqueueJson(HttpStatusCode.OK, IdentityVerdictJson(runId, verdicts[i % verdicts.Length], "gpt-4o", "gpt"));
+            handler.EnqueueJson(HttpStatusCode.OK, IdentityVerdictJson(runId, round.Attempts[i].Target.ModelId));
             IdentityInspectionStep step = await service.TrySubmitNextIdentityInspectionTargetAsync(round.RoundId);
             if (step.Probe is null)
             {
@@ -1267,15 +1339,21 @@ public static class Program
             : "(none)"));
         Console.WriteLine("PROBE_HISTORY=" + history.Count + " ALL_TERMINAL=" + allTerminal);
         foreach (ProbeRecord rec in history)
-            Console.WriteLine($"  RECORD={rec.LocalId} STATE={rec.State} SOURCE={rec.Source} TRIGGER={rec.IdentityInspectionTrigger} MODEL={rec.ModelId} VERDICT={rec.VerdictStatus ?? "(none)"}");
+            Console.WriteLine($"  RECORD={rec.LocalId} STATE={rec.State} SOURCE={rec.Source} TRIGGER={rec.IdentityInspectionTrigger} MODEL={rec.ModelId} VERDICT={rec.VerdictStatus ?? "(none)"} CONFIDENCE={rec.Confidence ?? "(none)"} INFERRED_MODEL={rec.InferredModel ?? "(none)"} WARNINGS={rec.Warnings.Count} REASONING={rec.Reasoning.Count}");
         Console.WriteLine("PLAINTEXT_KEY_ABSENT=" + noPlaintext);
         Console.WriteLine("REQUESTS=" + handler.Count + " ALL_FAKE_HOSTS=" +
             handler.Requests.All(q => q.Uri.Host.EndsWith(".example.com", StringComparison.OrdinalIgnoreCase)
                 || q.Uri.Host.Equals("bazaarlink.ai", StringComparison.OrdinalIgnoreCase)));
 
-        bool ok = !finalSnapshot.Settings.Enabled && ended.CompletedAt is not null
-            && history.Count == scope.Length && allTerminal && noPlaintext
-            && finalSnapshot.Targets.Where(t => t.Selected).All(t => !t.Authorized);
+        bool samplesOk = history.Any(r => r.VerdictStatus == "clean_match_family_only" && r.Confidence == "high" && r.Warnings.Count == 1 && r.InferredModel is null)
+            && history.Any(r => r.VerdictStatus == "clean_match_submodel_mismatch" && r.Confidence == "low" && r.InferredModel is null)
+            && history.Any(r => r.IdentityStatus == "uncertain" && r.VerdictStatus is null && r.Confidence is null && r.InferredModel is null && r.Warnings.Count == 0)
+            && history.All(r => r.Reasoning.SingleOrDefault()?.StartsWith(SimulatedMarker, StringComparison.Ordinal) == true);
+        bool ok = !finalSnapshot.Settings.Enabled && ended.CompletedAt is not null && samplesOk
+            && history.Count == consent.Scope.Count && allTerminal && noPlaintext
+            && finalSnapshot.Targets.Count(t => t.Selected && t.Authorized) == consent.Scope.Count
+            && finalSnapshot.Targets.All(t => t.Selected && t.Authorized)
+            && handler.Count == 2 + 2 * consent.Scope.Count;
         Console.WriteLine(ok ? "SEED_IDENTITY_UI=OK" : "SEED_IDENTITY_UI=FAILED");
         return ok ? 0 : 1;
     }

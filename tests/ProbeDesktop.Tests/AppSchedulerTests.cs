@@ -14,20 +14,20 @@ public static class AppSchedulerTests
         return Task.CompletedTask;
     }
 
-    public static async Task S02_WaitResetUsesSaveTime()
+    public static async Task S02_ConfirmedIntervalUsesPersistedCompletion()
     {
         var clock = new ManualClock();
         int count = 0;
         using var scheduler = new InspectionScheduler(_ => { Interlocked.Increment(ref count); return Task.FromResult(true); }, clock);
-        scheduler.Start(false);
+        scheduler.UpdateSchedule(30, clock.Origin, eligible: true);
         clock.Advance(2);
-        scheduler.TrySetInterval(10);
-        await Until(() => scheduler.NextStartAt == clock.Origin.AddMinutes(12));
-        clock.Advance(9);
+        scheduler.UpdateSchedule(10, clock.Origin, eligible: true);
+        await Until(() => scheduler.NextStartAt == clock.Origin.AddMinutes(10));
+        clock.Advance(7);
         Check.Equal(0, count, "new deadline has not arrived");
         clock.Advance(1);
         await Until(() => Volatile.Read(ref count) == 1);
-        Check.Equal(1, count, "one round at save plus interval");
+        Check.Equal(1, count, "one round at persisted completion plus confirmed interval, not save time");
     }
 
     public static Task S03_SaveDuringRoundUsesAbsoluteDue() => BusySaveAsync(false);
@@ -39,34 +39,30 @@ public static class AppSchedulerTests
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         int count = 0;
         CancellationToken roundToken = default;
-        using var scheduler = new InspectionScheduler(ct =>
+        InspectionScheduler scheduler = null!;
+        using var lifetime = scheduler = new InspectionScheduler(async ct =>
         {
             roundToken = ct;
-            return Interlocked.Increment(ref count) == 1 ? release.Task : Task.FromResult(true);
+            int invocation = Interlocked.Increment(ref count);
+            if (invocation == 1) await release.Task;
+            scheduler.UpdateSchedule(10, clock.GetUtcNow(), eligible: true);
+            return true;
         }, clock);
-        scheduler.Start(true);
-        Check.Equal(1, count, "initial round starts immediately");
+        scheduler.UpdateSchedule(30, null, eligible: true);
+        await Until(() => Volatile.Read(ref count) == 1);
         clock.Advance(2);
-        scheduler.TrySetInterval(10);
+        scheduler.UpdateSchedule(10, clock.Origin.AddMinutes(-30), eligible: true, busy: true);
         Check.False(roundToken.IsCancellationRequested, "save never cancels active round");
         clock.Advance(overdue ? 13 : 3);
         Check.Equal(1, count, "no overlapping round");
         release.SetResult(true);
-        if (overdue)
-        {
-            await Until(() => Volatile.Read(ref count) == 2);
-            await Until(() => scheduler.NextStartAt == clock.Origin.AddMinutes(25));
-            Check.Equal(2, count, "overdue deadline merges into exactly one round");
-        }
-        else
-        {
-            await Until(() => scheduler.NextStartAt == clock.Origin.AddMinutes(12));
-            clock.Advance(6);
-            Check.Equal(1, count, "finishing at five does not start before twelve");
-            clock.Advance(1);
-            await Until(() => Volatile.Read(ref count) == 2);
-            Check.Equal(2, count, "next round at twelve not fifteen");
-        }
+        DateTimeOffset completed = clock.GetUtcNow();
+        await Until(() => scheduler.NextStartAt == completed.AddMinutes(10));
+        clock.Advance(9);
+        Check.Equal(1, count, "even an overdue old deadline waits for the new completion plus interval");
+        clock.Advance(1);
+        await Until(() => scheduler.NextStartAt == completed.AddMinutes(20));
+        Check.Equal(2, count, "only one round dispatches at the new deadline");
     }
 
     public static async Task S05_StopCancelsButInvalidSaveDoesNot()
@@ -81,14 +77,50 @@ public static class AppSchedulerTests
             catch (OperationCanceledException) { ended.SetResult(); throw; }
             return true;
         }, clock);
-        scheduler.Start(true);
-        Check.False(scheduler.TrySetInterval(9), "invalid interval is refused");
+        scheduler.UpdateSchedule(30, null, eligible: true);
+        await Until(() => token.CanBeCanceled);
+        bool threw = false;
+        try { scheduler.UpdateSchedule(9, clock.Origin, eligible: true); }
+        catch (ArgumentOutOfRangeException) { threw = true; }
+        Check.True(threw, "invalid interval is refused");
         Check.Equal(TimeSpan.FromMinutes(30), scheduler.Interval, "invalid save keeps current interval");
         Check.False(token.IsCancellationRequested, "invalid save does not stop round");
         scheduler.Stop();
         await ended.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Check.True(token.IsCancellationRequested, "explicit stop cancels round");
         Check.False(scheduler.IsRunning, "explicit stop clears scheduler");
+    }
+
+    public static async Task S06_RestartHostCooldownAndEligibility()
+    {
+        var clock = new ManualClock();
+        int count = 0;
+        InspectionScheduler scheduler = null!;
+        using var lifetime = scheduler = new InspectionScheduler(_ =>
+        {
+            Interlocked.Increment(ref count);
+            scheduler.UpdateSchedule(10, clock.GetUtcNow(), eligible: true);
+            return Task.FromResult(true);
+        }, clock);
+        DateTimeOffset persistedCompletion = clock.Origin.AddMinutes(-18);
+        DateTimeOffset hostDeadline = clock.Origin.AddMinutes(4);
+        scheduler.UpdateSchedule(10, persistedCompletion, eligible: false, retryNotBefore: hostDeadline);
+        Check.Null(scheduler.NextStartAt, "no automatic schedule until the persisted plan is eligible");
+        scheduler.UpdateSchedule(10, persistedCompletion, eligible: true, retryNotBefore: hostDeadline);
+        Check.Equal(hostDeadline, scheduler.NextStartAt, "overdue after restart still honors host cooldown");
+        clock.Advance(3);
+        Check.Equal(0, count, "cooldown blocks despite overdue round");
+        scheduler.UpdateSchedule(10, persistedCompletion, eligible: true, busy: true, retryNotBefore: hostDeadline);
+        Check.Null(scheduler.NextStartAt, "externally running round suppresses dispatch");
+        clock.Advance(3);
+        Check.Equal(0, count, "busy suppresses overdue catch-up");
+        scheduler.UpdateSchedule(10, persistedCompletion, eligible: true, retryNotBefore: hostDeadline);
+        await Until(() => scheduler.NextStartAt == clock.Origin.AddMinutes(16));
+        Check.Equal(1, count, "one overdue catch-up, then normal cadence resumes");
+        scheduler.Stop();
+        clock.Advance(100);
+        Check.Null(scheduler.NextStartAt, "stop clears the pending deadline");
+        Check.Equal(1, count, "stop leaves no pending round");
     }
 
     private static async Task Until(Func<bool> condition)

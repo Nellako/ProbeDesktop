@@ -128,7 +128,8 @@ public sealed partial class DesktopService
         RunConnectionAsync(profileId, null, null, scheduled: true, cancellationToken);
 
     private async Task<ConnectionTestResult> RunConnectionAsync(Guid profileId, string? modelId, OutboundConsent? consent, bool scheduled, CancellationToken cancellationToken,
-        InspectionTarget? inspectionTarget = null, Guid? roundId = null, Guid? inspectionNonce = null, ConnectionRecordSource source = ConnectionRecordSource.Manual)
+        InspectionTarget? inspectionTarget = null, Guid? roundId = null, Guid? inspectionNonce = null, ConnectionRecordSource source = ConnectionRecordSource.Manual, Action? onDispatch = null,
+        int maxInspectionAttempts = 1)
     {
         ThrowIfDisposed();
         SemaphoreSlim gate = ConnectionGates.GetOrAdd(DataDirectory.TrimEnd(Path.DirectorySeparatorChar), _ => new(1, 1));
@@ -182,9 +183,8 @@ public sealed partial class DesktopService
                     Code = "Interrupted",
                     Message = "连接测试已准备发送；若应用中断，调用结果未知，不会自动重试。"
                 };
-                state.Vault.ConnectionResults[profileId] = result;
+                if (inspectionTarget is null) state.Vault.ConnectionResults[profileId] = result;
                 state.Vault.ConnectionHistory.Add(result);
-                TrimConnectionHistory(state);
                 await _store.SaveAsync(state, cancellationToken).ConfigureAwait(false);
             }
             finally { _store.Gate.Release(); }
@@ -193,21 +193,22 @@ public sealed partial class DesktopService
             bool ready = true;
             try
             {
-                await _store.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-                try
+                if (inspectionTarget is null)
                 {
-                    StoreState latest = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
-                    RelayProfile current = FindProfile(latest, profileId);
-                    if (!SameConnectionProfile(current, profile))
-                        throw new ClientOperationException("ConnectionTargetChanged", "发送前配置已变化；未发送请求。");
-                    if (inspectionTarget is not null)
-                        RequireInspectionTarget(latest, inspectionTarget, modelId!, inspectionNonce!.Value, source == ConnectionRecordSource.Automatic);
-                    else if (scheduled && !SessionMatches(latest.Vault.ConnectionSettings.GetValueOrDefault(profileId) ?? new(), current))
-                        throw new ClientOperationException("ScheduleNotAuthorized", "自动测试已关闭；未发送请求。");
-                    RequireHostDeadline(latest, profile.BaseUrl);
-                    cancellationToken.ThrowIfCancellationRequested();
+                    await _store.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        StoreState latest = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
+                        RelayProfile current = FindProfile(latest, profileId);
+                        if (!SameConnectionProfile(current, profile))
+                            throw new ClientOperationException("ConnectionTargetChanged", "发送前配置已变化；未发送请求。");
+                        if (scheduled && !SessionMatches(latest.Vault.ConnectionSettings.GetValueOrDefault(profileId) ?? new(), current))
+                            throw new ClientOperationException("ScheduleNotAuthorized", "自动测试已关闭；未发送请求。");
+                        RequireHostDeadline(latest, profile.BaseUrl);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                    finally { _store.Gate.Release(); }
                 }
-                finally { _store.Gate.Release(); }
             }
             catch (Exception ex) when (ex is ClientOperationException or OperationCanceledException)
             {
@@ -219,32 +220,46 @@ public sealed partial class DesktopService
                     Message = "发送前已取消或配置、授权发生变化；未发送请求。"
                 };
             }
-            if (ready) result = await SendConnectionAsync(profile, modelId!, key, result, cancellationToken).ConfigureAwait(false);
-            if (inspectionTarget is not null && ready && result.Stage != ConnectionTestStage.ModelResponded)
-                result = result with { Message = result.HttpStatusCode is 401 or 403 or 429
-                    ? result.Message
-                    : "本次连接巡检未确认模型响应（" + result.Code + "）；本轮同目标最多三次调用，每次独立记录，可能额外计费。结果未知不表示原请求未被处理或未收费；取消、配置或授权变化后停止后续发送，不切换协议或参数。" };
+            bool sent = false;
+            if (ready) result = await SendConnectionAsync(profile, modelId!, key, result, cancellationToken, () => { sent = true; onDispatch?.Invoke(); },
+                inspectionTarget, inspectionNonce).ConfigureAwait(false);
+            if (inspectionTarget is not null && sent && result.Stage != ConnectionTestStage.ModelResponded && result.HttpStatusCode is not (401 or 403 or 429))
+                result = result with { Message = $"{result.Message} 本轮同目标最多发 {maxInspectionAttempts} 次请求。" };
             await _store.Gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try
             {
                 StoreState state = await _store.LoadAsync(CancellationToken.None).ConfigureAwait(false);
                 result = SanitizeConnection(result with { CompletedAt = DateTimeOffset.UtcNow, ElapsedMilliseconds = watch.Elapsed.TotalMilliseconds }, new SensitiveText(state.Vault.KnownSecrets));
                 int index = state.Vault.ConnectionHistory.FindIndex(r => r.RecordId == result.RecordId);
+                if (inspectionTarget is not null && !sent)
+                {
+                    if (index >= 0)
+                    {
+                        state.Vault.ConnectionHistory.RemoveAt(index);
+                        await _store.SaveAsync(state, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new ClientOperationException(result.Code is "InspectionStopped" ? result.Code : "InspectionNotAuthorized", result.Message);
+                }
                 if (index >= 0) state.Vault.ConnectionHistory[index] = result; // Never resurrect a user-deleted record.
                 RelayProfile? current = state.Profiles.Find(p => p.Id == profileId);
                 if (current is not null && SameConnectionProfile(current, profile) &&
-                    state.Vault.ConnectionResults.GetValueOrDefault(profileId)?.RecordId == result.RecordId)
+                    (inspectionTarget is null ? state.Vault.ConnectionResults.GetValueOrDefault(profileId)?.RecordId == result.RecordId
+                     : index >= 0 && ActiveInspections.TryGetValue(DataDirectory, out var running) && !running.InvalidatedProfiles.Contains(profileId)))
                     state.Vault.ConnectionResults[profileId] = result;
                 if ((scheduled && !result.ModelResponded) || result.HttpStatusCode is 401 or 403) _connectionSession = null;
                 if (result.HttpStatusCode is 401 or 403)
+                {
                     state.Vault.InspectionGrants = state.Vault.InspectionGrants.Select(g => SameTargetProfile(g.Target, profile) ? g with { Paused = true } : g).ToList();
+                    if (ActiveInspections.TryGetValue(DataDirectory, out ActiveInspection? active))
+                        active.Paused.Add((profile.Id, profile.KeyRevision, profile.BaseUrl, profile.Protocol));
+                }
                 if (result.RetryNotBefore is { } deadline)
                 {
                     string host = InspectionHost(profile.BaseUrl);
                     if (deadline > state.Vault.InspectionHostDeadlines.GetValueOrDefault(host)) state.Vault.InspectionHostDeadlines[host] = deadline;
                 }
                 _connectionNextDue = DateTimeOffset.UtcNow.AddMinutes(state.Vault.ConnectionSettings.GetValueOrDefault(profileId)?.IntervalMinutes ?? 60);
-                TrimConnectionHistory(state);
                 await _store.SaveAsync(state, CancellationToken.None).ConfigureAwait(false);
                 return result;
             }
@@ -253,7 +268,8 @@ public sealed partial class DesktopService
         finally { gate.Release(); }
     }
 
-    private async Task<ConnectionTestResult> SendConnectionAsync(RelayProfile profile, string modelId, string key, ConnectionTestResult result, CancellationToken cancellationToken)
+    private async Task<ConnectionTestResult> SendConnectionAsync(RelayProfile profile, string modelId, string key, ConnectionTestResult result, CancellationToken cancellationToken,
+        Action? onDispatch, InspectionTarget? inspectionTarget, Guid? inspectionNonce)
     {
         bool dispatched = false;
         try
@@ -272,8 +288,29 @@ public sealed partial class DesktopService
                 using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeout.CancelAfter(TimeSpan.FromSeconds(45));
                 timeout.Token.ThrowIfCancellationRequested();
-                dispatched = true;
-                using HttpResponseMessage response = await SendAsync(request, timeout.Token).ConfigureAwait(false);
+                Task<HttpResponseMessage> sending;
+                if (inspectionTarget is not null)
+                {
+                    await _store.Gate.WaitAsync(timeout.Token).ConfigureAwait(false);
+                    try
+                    {
+                        StoreState latest = await _store.LoadAsync(timeout.Token).ConfigureAwait(false);
+                        RequireInspectionTarget(latest, inspectionTarget, modelId, inspectionNonce!.Value, result.Source == ConnectionRecordSource.Automatic);
+                        if (latest.Vault.ConnectionResults.TryGetValue(profile.Id, out var current) && current.RetryNotBefore > DateTimeOffset.UtcNow)
+                            throw new ClientOperationException("ConnectionRateLimited", "服务要求等待后再试，未发送请求。");
+                        timeout.Token.ThrowIfCancellationRequested();
+                        dispatched = true;
+                        onDispatch?.Invoke();
+                        sending = SendAsync(request, timeout.Token);
+                    }
+                    finally { _store.Gate.Release(); }
+                }
+                else
+                {
+                    dispatched = true;
+                    sending = SendAsync(request, timeout.Token);
+                }
+                using HttpResponseMessage response = await sending.ConfigureAwait(false);
                 result = result with { ApiReached = true, Stage = ConnectionTestStage.ApiReached, HttpStatusCode = (int)response.StatusCode };
                 if (!response.IsSuccessStatusCode)
                 {
@@ -311,6 +348,13 @@ public sealed partial class DesktopService
                             _ => "API 响应不完整或不兼容；结果未知，不会切换协议或重发。"
                         }
                     };
+                    if (inspectionTarget is not null && stage != ConnectionTestStage.ModelResponded)
+                        result = result with { Message = stage switch
+                        {
+                            ConnectionTestStage.PossibleSuccess => "API 返回成功响应，但未能确认有效模型文本。",
+                            ConnectionTestStage.Failed => "API 返回业务错误，未确认模型响应。",
+                            _ => "API 响应不完整或格式不兼容，未确认模型响应。"
+                        } };
                     result = result with { Message = result.Message + (contextCheck switch
                     {
                         ConnectionContextCheck.Passed => " 标记读取校验通过（约256 token输入）；不代表长上下文能力。",
@@ -326,8 +370,9 @@ public sealed partial class DesktopService
             result = result with
             {
                 Stage = dispatched ? ConnectionTestStage.Unknown : ConnectionTestStage.Failed,
-                Code = ex is ClientOperationException known ? known.Code : ex is OperationCanceledException ? "CancelledOrTimeout" : "Network",
-                Message = ex is OperationCanceledException
+                Code = ex is ClientOperationException known ? known.Code : ex is OperationCanceledException ? (!dispatched && inspectionTarget is not null ? "CancelledBeforeSend" : "CancelledOrTimeout") : "Network",
+                Message = !dispatched && inspectionTarget is not null ? "发送前已取消，或当前配置不可用；未发送请求。" : inspectionTarget is not null
+                    ? "未确认模型响应。请求可能已被服务处理或计费。" : ex is OperationCanceledException
                     ? "连接测试超时或已取消；请求可能已被服务处理，结果未知，不会自动重试。"
                     : "连接测试遇到网络、TLS、重定向或响应格式不兼容；无法确认模型响应，不会自动重试或切换协议。"
             };

@@ -105,7 +105,7 @@ internal static class OutboundSecurity
             !string.Equals(consent.Recipient, recipient, StringComparison.Ordinal) ||
             !string.Equals(consent.ModelId, modelId, StringComparison.Ordinal) ||
             consent.AcceptedAt < now.AddMinutes(-10) || consent.AcceptedAt > now.AddSeconds(30))
-            throw new ClientOperationException("ConsentRequired", "请重新确认当前档案、密钥版本、完整目标地址、操作用途及模型；确认有效期为 10 分钟。");
+            throw new ClientOperationException("ConsentRequired", "请重新确认配置、密钥版本、完整目标地址、用途及模型。确认有效期为 10 分钟。");
     }
 
     internal static bool IsSafeRunId(string? id) => id is { Length: > 0 and <= 200 } &&

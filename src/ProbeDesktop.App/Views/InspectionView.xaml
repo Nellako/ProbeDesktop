@@ -170,7 +170,7 @@
         <StackPanel Margin="0,0,0,8" MaxWidth="1100" HorizontalAlignment="Stretch">
             <TextBlock Text="连接巡检" Style="{StaticResource PageTitle}" />
             <TextBlock Style="{StaticResource Hint}" Margin="0,2,0,16"
-                       Text="对你勾选的配置和模型做直连连接测试（每次发送约256 token合成英文文本并检查三个随机标记读取，分词随模型不同，非256k上下文压力测试；输出上限参数为 64 token），与模型页当前选中的配置无关。每个模型每轮先测一次，没有确认成功时最多再重试两次（共 3 次），最坏请求次数为单次的 3 倍，可能增加费用，实际费用按中转站计价；标记不匹配不等于断连或降智，不因此新增重试或问题通知，也不证明真实身份能力。选择只是偏好，不会授权；开启、立即巡检前会列出范围并请你确认。不调用 BazaarLink 鉴别检测。" />
+                       Text="直连已确认的配置和模型，不调用 BazaarLink。最大重试可选 0、1、2 次（默认 0）；每个目标每轮最多 1、2、3 次请求，不是费用上限。" />
 
             <!-- 1. 状态、间隔与操作 -->
             <Border Style="{StaticResource Card}" Padding="20,16">
@@ -185,22 +185,17 @@
                         <Label Content="间隔（分钟）(_M)" Target="{Binding ElementName=GlobalIntervalBox}" VerticalAlignment="Center" Padding="0,0,8,6" />
                         <TextBox x:Name="GlobalIntervalBox" Width="72" MaxLength="3" Margin="0,0,10,6"
                                  Text="{Binding IntervalText, UpdateSourceTrigger=PropertyChanged}"
-                                 AutomationProperties.Name="全局巡检间隔分钟"
-                                 ToolTip="10 至 480 的整数，默认 30。开启或进行中也可修改，点“保存间隔”后生效，不会打断当前这一轮。">
-                            <TextBox.InputBindings>
-                                <KeyBinding Key="Return" Command="{Binding SaveIntervalCommand}" />
-                            </TextBox.InputBindings>
-                        </TextBox>
-                        <Button Content="保存间隔(_V)" Margin="0,0,20,6" MinWidth="96" Command="{Binding SaveIntervalCommand}"
-                                AutomationProperties.Name="保存巡检间隔"
-                                ToolTip="保存后等待计时从现在起重新开始；正在进行的一轮不受影响。已开启且有已授权范围时会先让你确认。" />
+                                 AutomationProperties.Name="连接巡检间隔分钟"
+                                 ToolTip="10 至 480 分钟，默认 30。确认巡检设置后生效。" />
+                        <Label Content="最大重试次数(_R)" Target="{Binding ElementName=RetryBox}" VerticalAlignment="Center" Padding="0,0,8,6" />
+                        <ComboBox x:Name="RetryBox" Width="64" Margin="0,0,16,6" ItemsSource="{Binding RetryOptions}"
+                                  SelectedItem="{Binding MaxRetries, Mode=TwoWay}" AutomationProperties.Name="最大重试次数" />
                         <Button Content="{Binding ToggleText}" Style="{StaticResource PrimaryButton}" Margin="0,0,10,6" MinWidth="136"
-                                Command="{Binding ToggleCommand}" AutomationProperties.Name="开关全局巡检" />
+                                Command="{Binding ToggleCommand}" AutomationProperties.Name="开关自动连接巡检" />
                         <Button Content="立即巡检一轮" Margin="0,0,10,6" Command="{Binding RunOnceCommand}"
-                                AutomationProperties.Name="立即巡检一轮" ToolTip="只巡检所选范围，不调用 Probe，不改变定时开关。范围未授权时会先弹出确认。" />
-                        <Button Content="确认巡检范围…" Margin="0,0,10,6" Command="{Binding ConfirmScopeCommand}"
-                                AutomationProperties.Name="确认连接巡检范围"
-                                ToolTip="有待确认模型时可用，无待确认模型时置灰。只保存范围授权，不开启巡检、不额外执行或重置计时，也不打断当前轮。" />
+                                AutomationProperties.Name="立即巡检一轮" ToolTip="使用已确认的设置，不改变自动开关。" />
+                        <Button Content="确认巡检设置…(_S)" Margin="0,0,10,6" Command="{Binding ConfirmScopeCommand}"
+                                AutomationProperties.Name="确认连接巡检设置" ToolTip="一起保存范围、间隔和最大重试次数。" />
                     </WrapPanel>
                     <TextBlock Text="{Binding IntervalHint}" Style="{StaticResource Hint}" AutomationProperties.LiveSetting="Polite" />
                     <TextBlock Text="{Binding Status}" Style="{StaticResource Hint}" Margin="0,8,0,0" AutomationProperties.LiveSetting="Polite"

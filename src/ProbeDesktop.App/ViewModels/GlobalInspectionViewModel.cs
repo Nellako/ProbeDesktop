@@ -33,8 +33,6 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
 {
     private readonly ProblemNotificationCoordinator? _notifier;
     private readonly IGlobalInspectionService? _service;
-    private readonly IInspectionSelectionService? _selectionService;
-    private readonly IInspectionIntervalService? _intervalService;
     private readonly IDialogService _dialogs;
     private readonly ProfileStore? _store;
     private readonly RecordFeed? _feed;
@@ -55,9 +53,10 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
     private bool _loaded;
     private bool _disposed;
     private bool _selectionDirty;
-    private bool _selectionSaving;
-    private bool _persisting;
-    private Task? _persistTask;
+    private int _draftRevision;
+    private int _snapshotEpoch;
+    private int _savedRetries;
+    private int _maxRetries;
     private bool _refetching;
     private bool _refetchAgain;
     private bool _resultsLoading;
@@ -78,8 +77,6 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
     {
         _notifier = notifier;
         _service = service;
-        _selectionService = service as IInspectionSelectionService;
-        _intervalService = service as IInspectionIntervalService;
         _dialogs = dialogs;
         _store = store;
         _feed = feed;
@@ -94,7 +91,6 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
         ToggleCommand = new AsyncCommand(ToggleAsync, () => IsAvailable && (Enabled || !_busy));
         RunOnceCommand = new AsyncCommand(RunOnceAsync, () => IsAvailable && !_busy);
         // 保存间隔、确认新增范围在开启或一轮进行中也可用，且不会打断当前轮。
-        SaveIntervalCommand = new AsyncCommand(SaveIntervalAsync, () => IsAvailable && IntervalUnsaved && IntervalError.Length == 0);
         ConfirmScopeCommand = new AsyncCommand(ConfirmScopeAsync, () => IsAvailable && CanConfirmScope);
         if (_store is not null)
         {
@@ -105,13 +101,12 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
 
     public ICommand ToggleCommand { get; }
     public ICommand RunOnceCommand { get; }
-    public ICommand SaveIntervalCommand { get; }
     public ICommand ConfirmScopeCommand { get; }
 
     /// <summary>配置节点（勾选 + 可展开的子模型）。</summary>
     public ObservableCollection<InspectionProfileNode> ProfileNodes { get; } = [];
 
-    public bool IsAvailable => _service is not null && _selectionService is not null && _intervalService is not null;
+    public bool IsAvailable => _service is not null;
     public bool HasProfiles => ProfileNodes.Count > 0;
 
     /// <summary>当前是否开启（来自 Core 持久化设置）。</summary>
@@ -149,16 +144,15 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
         }
     }
 
-    public string ToggleText => Enabled ? "关闭全局巡检" : "开启全局巡检…";
+    public string ToggleText => Enabled ? "关闭自动巡检" : "开启自动巡检";
 
     public string StateText => !Enabled
-        ? "全局巡检：关闭"
-        : _scheduler.IsRunning
-            ? $"全局巡检：已开启，每 {_savedInterval} 分钟一轮"
-            : $"全局巡检：已保存为开启（每 {_savedInterval} 分钟），本次运行尚未在计时";
+        ? "自动巡检：关闭"
+        : _busy ? "自动巡检：已开启 · 巡检进行中"
+        : _scheduler.IsRunning ? "自动巡检：已开启" : "自动巡检：已开启 · 等待可用的已授权目标";
 
     public string NextStartText => Enabled && _scheduler.NextStartAt is { } n
-        ? $"下一轮最早开始于 {n.ToLocalTime():HH:mm}（每轮结束后等待整个间隔；保存新间隔会从保存时重新计时）"
+        ? $"下一轮预约：{n.ToLocalTime():MM-dd HH:mm}"
         : "";
 
     // ---- 间隔 ----
@@ -171,6 +165,7 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
         {
             if (SetProperty(ref _intervalText, value ?? ""))
             {
+                _draftRevision++;
                 UpdateIntervalState();
             }
         }
@@ -184,12 +179,17 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
 
     /// <summary>输入框内容是有效整数且与已保存间隔不同。</summary>
     public bool IntervalUnsaved => IntervalError.Length == 0 && InspectionScheduler.TryParseInterval(IntervalText, out var m) && m != _savedInterval;
+    public int MaxRetries
+    {
+        get => _maxRetries;
+        set { if (value is >= 0 and <= 2 && SetProperty(ref _maxRetries, value)) { _draftRevision++; UpdateIntervalState(); } }
+    }
+    public IReadOnlyList<int> RetryOptions { get; } = [0, 1, 2];
+    public bool HasDraft => _selectionDirty || IntervalUnsaved || IntervalError.Length > 0 || MaxRetries != _savedRetries;
 
     public string IntervalHint => IntervalError.Length > 0
         ? IntervalError
-        : IntervalUnsaved
-            ? $"尚未保存：当前生效间隔仍为 {_savedInterval} 分钟。点“保存间隔”后才会生效。"
-            : $"当前生效间隔：{_savedInterval} 分钟（可设 {InspectionScheduler.MinIntervalMinutes}–{InspectionScheduler.MaxIntervalMinutes}，默认 {InspectionScheduler.DefaultIntervalMinutes}）。";
+        : $"已确认：间隔 {_savedInterval} 分钟，最大重试 {_savedRetries} 次。" + (HasDraft ? " 有未确认的更改。" : "");
 
     private void UpdateIntervalState()
     {
@@ -198,6 +198,8 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
             : $"间隔需为 {InspectionScheduler.MinIntervalMinutes}–{InspectionScheduler.MaxIntervalMinutes} 的整数分钟。";
         OnPropertyChanged(nameof(IntervalUnsaved));
         OnPropertyChanged(nameof(IntervalHint));
+        OnPropertyChanged(nameof(CanConfirmScope));
+        UpdatePendingText();
         CommandManager.InvalidateRequerySuggested();
     }
 
@@ -217,7 +219,7 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
     }
 
     /// <summary>所选范围有未确认模型时可确认，不依赖巡检开关。</summary>
-    public bool CanConfirmScope => _pendingCount > 0;
+    public bool CanConfirmScope => _snapshot is not null && IntervalError.Length == 0 && (HasDraft || _pendingCount > 0 || _snapshot.NeedsUpgradeConfirmation);
 
     // ---- 最新一轮 ----
 
@@ -242,7 +244,8 @@ public sealed partial class GlobalInspectionViewModel : ObservableObject, IInspe
             var state = r.CompletedAt is { } done
                 ? (r.Cancelled ? $"已取消（{Format.Time(done)}）" : $"已完成（{Format.Time(done)}）")
                 : _busy ? "进行中" : "未完成（可能被中断）";
-            return $"{kind} · 开始于 {Format.Time(r.StartedAt)} · {state}";
+            return $"{kind} · 开始于 {Format.Time(r.StartedAt)} · {state}" +
+                (r.IntervalMinutes is int m && r.MaxRetries is int retry ? $" · 本轮采用 {m} 分钟间隔、最多重试 {retry} 次" : "");
         }
     }
 

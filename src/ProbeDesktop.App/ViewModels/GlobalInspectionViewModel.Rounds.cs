@@ -9,10 +9,11 @@ public sealed partial class GlobalInspectionViewModel
 {
     private readonly record struct RoundOutcome(InspectionRoundSummary? Summary, Exception? Fatal, bool Skipped);
 
-    private void StartScheduler(bool immediate)
+    private void RefreshSchedule()
     {
-        _scheduler.TrySetInterval(_savedInterval);
-        _scheduler.Start(immediate);
+        if (!_loaded || _disposed || _snapshot is not { } snap) return;
+        _scheduler.UpdateSchedule(snap.Settings.IntervalMinutes, snap.LastCompletedAt,
+            Enabled && InspectionScope.AuthorizedSelectedCount(snap) > 0, _busy, snap.RetryNotBefore);
         OnPropertyChanged(nameof(StateText));
         OnPropertyChanged(nameof(NextStartText));
     }
@@ -35,9 +36,8 @@ public sealed partial class GlobalInspectionViewModel
             return true;
         }
 
-        if (outcome.Fatal is ClientOperationException { Code: "InspectionNotAuthorized" })
+        if (outcome.Fatal is ClientOperationException { Code: "InspectionNotAuthorized" or "InspectionNotDue" or "InspectionDisabled" or "ConnectionRateLimited" })
         {
-            Status = "本轮没有已授权的所选模型，未发送任何请求；仍按间隔等待下一轮。请检查所选范围。";
             return true;
         }
 
@@ -54,14 +54,15 @@ public sealed partial class GlobalInspectionViewModel
         {
             var snap = await _service!.SaveInspectionSettingsAsync(
                 new InspectionSettings { Enabled = false, IntervalMinutes = _savedInterval }, null, _lifetime.Token);
-            ApplySnapshot(snap, reloadSelection: !_selectionDirty && !_selectionSaving, allowPrune: false);
+            _snapshotEpoch++;
+            ApplySnapshot(snap, reloadSelection: !_selectionDirty, allowPrune: false);
         }
         catch (Exception)
         {
         }
 
         Enabled = false;
-        Status = "全局巡检已停止：" + UserMessages.Describe(fatal) + " 不会自动重试，请检查后手动重新开启。";
+        Status = "自动连接巡检已停止：" + UserMessages.Describe(fatal) + " 检查后可重新开启。";
     }
 
     /// <summary>串行执行一轮。已有一轮在进行时直接跳过，不排队、不补跑。单项失败由 Core 记录并继续。</summary>
@@ -73,11 +74,14 @@ public sealed partial class GlobalInspectionViewModel
         }
 
         IsBusy = true;
+        RefreshSchedule();
         _lastNotifiedDone = -1;
         var progress = new Progress<InspectionRoundSummary>(OnProgress);
         try
         {
-            var summary = await _service!.RunInspectionRoundAsync(trigger, progress, ct);
+            var summary = trigger == InspectionTrigger.Automatic
+                ? await _service!.RunDueInspectionRoundAsync(progress, ct)
+                : await _service!.RunInspectionRoundAsync(trigger, progress, ct);
             _round = summary;
             Status = summary.Cancelled
                 ? "本轮巡检已取消。" + CountsTail(summary)
@@ -106,14 +110,15 @@ public sealed partial class GlobalInspectionViewModel
         }
         finally
         {
-            _roundGate.Release();
-            IsBusy = false;
-            OnRoundChanged();
             if (!_disposed && !_lifetime.IsCancellationRequested)
             {
-                _ = FetchAsync(allowPrune: true);
+                await FetchAsync(allowPrune: false);
                 _feed?.NotifyConnection();
             }
+            _roundGate.Release();
+            IsBusy = false;
+            RefreshSchedule();
+            OnRoundChanged();
         }
     }
 
@@ -231,7 +236,7 @@ public sealed partial class GlobalInspectionViewModel
                 RoundResults = new ObservableCollection<RoundResultRow>(rows);
                 ResultsNote = rows.Count == 0
                     ? "本轮暂无模型结果记录（尚未完成第一个模型，或被跳过的模型不产生记录）。只显示最新一轮，完整历史请到“连接记录”。"
-                    : $"只显示最新一轮各模型在本轮的最高状态结果（成功 ＞ 成功（可能）＞ 失败，同级取最新，标记读取跟随该代表记录），按代表记录开始时间倒序；每个模型每轮最多尝试 {ConnectionRoundDisplay.MaxAttempts} 次，其余尝试不单独列出也不重复计入本轮统计。被跳过的模型不产生记录。各次尝试的完整历史请到“连接记录”。";
+                    : "每个模型显示本轮最好结果，同级取最新。各次尝试见“连接记录”。";
             }
         }
         finally

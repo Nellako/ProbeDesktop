@@ -216,7 +216,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _ = Inspection.LoadAsync();
         _ = IdentityInspection.LoadAsync();
         _ = Notifications.LoadAsync();
-        StatusText = $"已读取 {Store.Items.Count} 个配置、{_runs.Records.Count} 条历史。读取本地数据时未联网。模型列表、手动 Probe 检测与手动连接测试逐次确认；此前已授权的连接巡检会在已授权范围内自动恢复并立即运行一轮；身份识别巡检只恢复计时（第一轮在一个完整间隔之后），既有鉴别任务仅恢复只读查询，不会重新提交。";
+        StatusText = $"已读取 {Store.Items.Count} 个配置、{_runs.Records.Count} 条鉴别记录。两类巡检各自按已确认设置恢复排期；已提交的鉴别任务只恢复查询。";
         OnPropertyChanged(nameof(RunSummary));
     }
 
@@ -368,7 +368,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         return IdentityInspection.Enabled
-            ? "定时身份识别巡检仍处于开启状态。退出会停止本机计时，之后不再向 BazaarLink 提交；已提交的任务无法撤回，可能已经产生费用。下次启动会在已授权范围内恢复计时，第一轮在一个完整间隔之后才开始。"
+            ? "自动身份识别巡检已开启。退出会停止本机巡检；已发出的请求无法撤回，可能已产生费用。下次启动会按已确认的设置恢复排期。"
             : null;
     }
 

@@ -42,6 +42,9 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
     private bool _startupDone;
     private bool _loaded;
     private bool _disposed;
+    private int _draftRevision;
+    private int _snapshotEpoch;
+    private bool _manualPromptOpen;
     private int _savedInterval = InspectionScheduler.DefaultIntervalMinutes;
     private int _pendingCount;
     private string _intervalText = InspectionScheduler.DefaultIntervalMinutes.ToString(CultureInfo.InvariantCulture);
@@ -68,7 +71,6 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
         // 关闭始终可用（即使一轮正在进行）；开启与立即运行需要空闲。
         ToggleCommand = new AsyncCommand(ToggleAsync, () => IsAvailable && (Enabled || !_busy));
         RunOnceCommand = new AsyncCommand(RunOnceAsync, () => IsAvailable && !_busy);
-        SaveIntervalCommand = new AsyncCommand(SaveIntervalAsync, () => IsAvailable && IntervalUnsaved && IntervalError.Length == 0);
         ConfirmScopeCommand = new AsyncCommand(ConfirmScopeAsync, () => IsAvailable && CanConfirmScope);
         _store.ProfileUpdated += OnStoreProfileUpdated;
         _store.Items.CollectionChanged += OnStoreItemsChanged;
@@ -77,7 +79,6 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
 
     public ICommand ToggleCommand { get; }
     public ICommand RunOnceCommand { get; }
-    public ICommand SaveIntervalCommand { get; }
     public ICommand ConfirmScopeCommand { get; }
 
     public ObservableCollection<InspectionProfileNode> ProfileNodes { get; } = [];
@@ -124,16 +125,16 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
         }
     }
 
-    public string ToggleText => Enabled ? "关闭定时身份识别巡检" : "开启定时身份识别巡检…";
+    public string ToggleText => Enabled ? "关闭自动巡检" : "开启自动巡检";
 
     public string StateText => !Enabled
-        ? "定时身份识别巡检：关闭"
-        : _scheduler.IsRunning
-            ? $"定时身份识别巡检：已开启，每轮结束后等待 {_savedInterval} 分钟"
-            : $"定时身份识别巡检：已保存为开启（每轮结束后等待 {_savedInterval} 分钟），本次运行尚未在计时";
+        ? "自动巡检：关闭"
+        : _busy ? "自动巡检：已开启 · 巡检进行中"
+        : _runs.Records.Any(r => r.IsActive) ? "自动巡检：已开启 · 等待当前鉴别任务结束"
+        : _scheduler.IsRunning ? "自动巡检：已开启" : "自动巡检：已开启 · 等待可用的已授权目标";
 
     public string NextStartText => Enabled && _scheduler.NextStartAt is { } n
-        ? $"下一轮最早开始于 {n.ToLocalTime():HH:mm}（每轮结束后等待整个间隔；保存新间隔会从保存时重新计时）"
+        ? $"下一轮预约：{n.ToLocalTime():MM-dd HH:mm}"
         : "";
 
     public string CurrentStateHint => _busy ? "正在检测，期间不能再次开始，也不会补跑。" : "";
@@ -148,6 +149,7 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
         {
             if (SetProperty(ref _intervalText, value ?? ""))
             {
+                _draftRevision++;
                 UpdateIntervalState();
             }
         }
@@ -160,12 +162,11 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
     }
 
     public bool IntervalUnsaved => IntervalError.Length == 0 && InspectionScheduler.TryParseInterval(IntervalText, out var m) && m != _savedInterval;
+    public bool HasDraft => _selectionDirty || IntervalUnsaved || IntervalError.Length > 0;
 
     public string IntervalHint => IntervalError.Length > 0
         ? IntervalError
-        : IntervalUnsaved
-            ? $"尚未保存：当前生效间隔仍为 {_savedInterval} 分钟。点“保存间隔”后才会生效。"
-            : $"当前生效间隔：{_savedInterval} 分钟（可设 {InspectionScheduler.MinIntervalMinutes}–{InspectionScheduler.MaxIntervalMinutes}，默认 {InspectionScheduler.DefaultIntervalMinutes}）。";
+        : $"已确认：间隔 {_savedInterval} 分钟。" + (HasDraft ? " 有未确认的更改。" : "");
 
     private void UpdateIntervalState()
     {
@@ -174,6 +175,8 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
             : $"间隔需为 {InspectionScheduler.MinIntervalMinutes}–{InspectionScheduler.MaxIntervalMinutes} 的整数分钟。";
         OnPropertyChanged(nameof(IntervalUnsaved));
         OnPropertyChanged(nameof(IntervalHint));
+        OnPropertyChanged(nameof(CanConfirmScope));
+        UpdatePendingText();
         CommandManager.InvalidateRequerySuggested();
     }
 
@@ -192,7 +195,7 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
     }
 
     /// <summary>所选范围有未确认目标时可确认，不依赖巡检开关。</summary>
-    public bool CanConfirmScope => _pendingCount > 0;
+    public bool CanConfirmScope => _snapshot is not null && IntervalError.Length == 0 && (HasDraft || _pendingCount > 0 || _snapshot.NeedsUpgradeConfirmation);
 
     // ---- 最新一轮 ----
 
@@ -213,7 +216,7 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
         {
             if (_round is not { } r)
             {
-                return "还没有身份识别巡检记录。点“立即巡检一轮”或开启定时后，这里显示最新一轮的进度和结果。";
+                return "还没有身份识别巡检记录。运行一轮后，这里会显示进度和结果。";
             }
 
             var kind = IdentityInspectionText.Kind(r.Trigger) + "身份识别巡检";
@@ -221,7 +224,7 @@ public sealed partial class IdentityInspectionViewModel : ObservableObject, IIns
             var state = r.CompletedAt is { } done
                 ? (r.Cancelled ? $"已取消（{Format.Time(done)}）" : $"已结束（{Format.Time(done)}）")
                 : _busy ? "进行中" : "未完成（可能被中断）";
-            return $"{kind} · 开始于 {Format.Time(r.StartedAt)} · {state}";
+            return $"{kind} · 开始于 {Format.Time(r.StartedAt)} · {state}" + (r.IntervalMinutes is int m ? $" · 本轮采用 {m} 分钟间隔" : "");
         }
     }
 

@@ -36,6 +36,42 @@ public static class Fixtures
 
     public static HttpClient Client(FakeHttpHandler handler) => new(handler, disposeHandler: false);
 
+    // Construct exactly what a UI would disclose for the draft, rather than first writing
+    // selections to storage. Some tests deliberately alter the resulting consent to test rejection.
+    public static InspectionConsent InspectionApproval(InspectionSnapshot snapshot,
+        IReadOnlyList<InspectionSelection> selections, int minutes = 30, int attempts = 3)
+        => new(snapshot.Targets.Select(t => t.Target)
+            .Select(t => t with { Models = t.Models.Where(m => selections.Any(s =>
+                s.ProfileId == t.ProfileId && s.IsSelected && s.SelectedModelIds.Contains(m))).ToArray() })
+            .Where(t => t.Models.Count > 0).ToArray(), minutes, DateTimeOffset.UtcNow)
+        { MaxAttempts = attempts, SettingsRevision = snapshot.SettingsRevision };
+
+    public static async Task<InspectionSnapshot> ConfirmInspectionAsync(IGlobalInspectionService service,
+        IReadOnlyList<InspectionSelection> selections, int minutes = 30, int attempts = 3, bool enable = false)
+    {
+        var snapshot = await service.GetInspectionSnapshotAsync();
+        var confirmed = await service.ConfirmInspectionSettingsAsync(selections, InspectionApproval(snapshot, selections, minutes, attempts));
+        return enable ? await service.SaveInspectionSettingsAsync(new() { Enabled = true }) : confirmed;
+    }
+
+    public static IdentityInspectionConsent IdentityApproval(IdentityInspectionSnapshot snapshot,
+        IReadOnlyList<IdentityInspectionSelection> selections, int minutes = 30)
+        => new(snapshot.Targets.Select(t => t.Target).Where(t => selections.Any(s =>
+            s.ProfileId == t.ProfileId && s.IsSelected && s.SelectedModelIds.Contains(t.ModelId))).ToArray(), minutes, DateTimeOffset.UtcNow)
+        { SettingsRevision = snapshot.SettingsRevision };
+
+    public static IdentityInspectionConsent ManualIdentityApproval(IdentityInspectionSnapshot snapshot)
+        => new(snapshot.Targets.Where(t => t.Selected && t.Authorized && !t.Paused).Select(t => t.Target).ToArray(),
+            snapshot.Settings.IntervalMinutes, DateTimeOffset.UtcNow) { SettingsRevision = snapshot.SettingsRevision };
+
+    public static async Task<IdentityInspectionSnapshot> ConfirmIdentityAsync(IIdentityInspectionService service,
+        IReadOnlyList<IdentityInspectionSelection> selections, int minutes = 30, bool enable = false)
+    {
+        var snapshot = await service.GetIdentityInspectionSnapshotAsync();
+        var confirmed = await service.ConfirmIdentityInspectionSettingsAsync(selections, IdentityApproval(snapshot, selections, minutes));
+        return enable ? await service.SaveIdentityInspectionSettingsAsync(new() { Enabled = true }) : confirmed;
+    }
+
     public static string ModelsJson(params string[] ids)
     {
         var sb = new StringBuilder("{\"object\":\"list\",\"data\":[");

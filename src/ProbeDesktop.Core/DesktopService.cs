@@ -38,7 +38,7 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(profile);
-        string name = Required(profile.Name, 100, "档案名称");
+        string name = Required(profile.Name, 100, "配置名称");
         string baseUrl = OutboundSecurity.NormalizeBaseUrl(profile.BaseUrl);
         ModelApiEndpoints.ValidateProtocol(profile.Protocol);
         string model = OptionalInput(profile.DefaultModelId, 256, "默认模型");
@@ -51,7 +51,7 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
             StoreState state = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
             RelayProfile? existing = state.Profiles.Find(p => p.Id == profile.Id);
             if (existing is null && key is null)
-                throw new ClientOperationException("KeyRequired", "新建档案必须输入 API Key；编辑时留空才表示保留原密钥。");
+                throw new ClientOperationException("KeyRequired", "新建配置需要 API Key。编辑配置时留空可保留原密钥。");
             Guid id = existing?.Id ?? Guid.NewGuid(); // Never trust a caller-supplied new identifier or secret reference.
             SecretEntry? oldSecret = existing is null ? null : state.Vault.Secrets.GetValueOrDefault(existing.Id);
             bool keyChanged = key is not null && !string.Equals(key, oldSecret?.Key, StringComparison.Ordinal);
@@ -91,8 +91,11 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
                 state.Vault.InspectionSelections = state.Vault.InspectionSelections.Select(s => s.ProfileId == id ? s with { SelectedModelIds = [] } : s).ToList();
                 state.Vault.ConnectionResults.Remove(id);
                 state.Vault.ConnectionSettings.Remove(id);
+                if (existing is not null) InvalidateIdentityTargets(state, id);
             }
             await _store.SaveAsync(state, cancellationToken).ConfigureAwait(false);
+            if (invalidateModels && existing is not null && ActiveInspections.TryGetValue(DataDirectory, out ActiveInspection? active))
+                active.InvalidatedProfiles.Add(id);
             return state.Profiles.Single(p => p.Id == id);
         }
         finally { _store.Gate.Release(); }
@@ -171,7 +174,12 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
             state.Profiles[state.Profiles.IndexOf(profile)] = updated;
             state.Vault.InspectionSelections = state.Vault.InspectionSelections.Select(s => s.ProfileId == profileId
                 ? s with { SelectedModelIds = s.SelectedModelIds.Where(models.ContainsKey).ToArray() } : s).ToList();
+            state.Vault.InspectionGrants = state.Vault.InspectionGrants.Select(g => g.Target.ProfileId == profileId
+                ? g with { Target = g.Target with { Models = g.Target.Models.Where(models.ContainsKey).ToArray() } } : g).Where(g => g.Target.Models.Count != 0).ToList();
+            InvalidateIdentityTargets(state, profileId, models);
             await _store.SaveAsync(state, cancellationToken).ConfigureAwait(false);
+            if (ActiveInspections.TryGetValue(DataDirectory, out ActiveInspection? active))
+                foreach (var removed in profile.Models.Where(m => !models.ContainsKey(m.Id))) active.InvalidatedModels.Add((profileId, removed.Id));
             return updated;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -272,8 +280,26 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
                     request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
                     // No resubmission, including on timeout, cancellation, redirects, malformed JSON or 5xx.
                     using CancellationTokenSource operation = OperationTimeout(cancellationToken);
-                    dispatched = true;
-                    using HttpResponseMessage response = await SendAsync(request, operation.Token).ConfigureAwait(false);
+                    Task<HttpResponseMessage> sending;
+                    if (identityAttemptId is Guid frozenAttempt && identityRoundId is Guid frozenRound)
+                    {
+                        await _store.Gate.WaitAsync(operation.Token).ConfigureAwait(false);
+                        try
+                        {
+                            StoreState latest = await _store.LoadAsync(operation.Token).ConfigureAwait(false);
+                            RequireIdentityDispatch(latest, frozenRound, frozenAttempt, record);
+                            operation.Token.ThrowIfCancellationRequested();
+                            dispatched = true;
+                            sending = SendAsync(request, operation.Token);
+                        }
+                        finally { _store.Gate.Release(); }
+                    }
+                    else
+                    {
+                        dispatched = true;
+                        sending = SendAsync(request, operation.Token);
+                    }
+                    using HttpResponseMessage response = await sending.ConfigureAwait(false);
                     using JsonDocument document = await OutboundSecurity.ReadJsonAsync(response, operation.Token).ConfigureAwait(false);
                     return await UpdateRecordAsync(record.LocalId,
                         (current, sanitizer) => ProbeResponseAdapter.Apply(current, document.RootElement, sanitizer, isSubmission: true),
@@ -283,6 +309,14 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
             }
             catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or ClientOperationException or IOException)
             {
+                if (identityAttemptId is not null && !dispatched)
+                {
+                    // The final gate definitively prevented dispatch. Remove only this prewrite;
+                    // the round's attempt still records the skip, without a bogus failed run.
+                    await DeleteRecordCoreAsync(record.LocalId, locallyUnsent: true, CancellationToken.None).ConfigureAwait(false);
+                    if (ex is OperationCanceledException or ClientOperationException) throw;
+                    throw new ClientOperationException("IdentityIntentBlocked", "未提交鉴别任务。");
+                }
                 string error = NetworkMessage(ex, "提交");
                 ProbeRecord failed = await UpdateRecordAsync(record.LocalId, (current, _) => current with
                 {
@@ -292,7 +326,7 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
                 if (ex is ClientOperationException operation && operation.Code.StartsWith("Http", StringComparison.Ordinal))
                 {
                     if (operation.Code == "Http429") await SaveProbeRateLimitAsync(operation.RetryAfter).ConfigureAwait(false);
-                    if (identityAttemptId is not null && operation.Code is "Http401" or "Http403") await PauseIdentityProfileAsync(profileId).ConfigureAwait(false);
+                    if (identityAttemptId is not null && operation.Code is "Http401" or "Http403") await PauseIdentityProfileAsync(record).ConfigureAwait(false);
                     throw new ClientOperationException(operation.Code, failed.Error!, operation.RetryAfter);
                 }
                 return failed;
@@ -346,14 +380,17 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
             if (ex is ClientOperationException operation && operation.Code.StartsWith("Http", StringComparison.Ordinal))
             {
                 if (operation.Code == "Http429") await SaveProbeRateLimitAsync(operation.RetryAfter).ConfigureAwait(false);
-                if (record.Source == ProbeRecordSource.IdentityInspection && operation.Code is "Http401" or "Http403") await PauseIdentityProfileAsync(record.ProfileId).ConfigureAwait(false);
+                if (record.Source == ProbeRecordSource.IdentityInspection && operation.Code is "Http401" or "Http403") await PauseIdentityProfileAsync(record).ConfigureAwait(false);
                 throw new ClientOperationException(operation.Code, interrupted.Error!, operation.RetryAfter);
             }
             return interrupted;
         }
     }
 
-    public async Task DeleteRecordAsync(Guid localId, CancellationToken cancellationToken = default)
+    public Task DeleteRecordAsync(Guid localId, CancellationToken cancellationToken = default) =>
+        DeleteRecordCoreAsync(localId, locallyUnsent: false, cancellationToken);
+
+    private async Task DeleteRecordCoreAsync(Guid localId, bool locallyUnsent, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         await _store.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -362,7 +399,7 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
             StoreState state = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
             ProbeRecord? record = state.Vault.History.Find(r => r.LocalId == localId);
             if (record is null) return;
-            if (record.State == LocalRunState.Submitting)
+            if (!locallyUnsent && record.State == LocalRunState.Submitting)
                 throw new ClientOperationException("SubmissionBusy", "提交期间不能删除本地记录，请等待本次提交结束。");
             state.Vault.History.Remove(record);
             await _store.SaveAsync(state, cancellationToken).ConfigureAwait(false);
@@ -502,12 +539,12 @@ public sealed partial class DesktopService : IDesktopService, IDirectConnectionS
         });
     }
     private static RelayProfile FindProfile(StoreState state, Guid id) => state.Profiles.Find(p => p.Id == id)
-        ?? throw new ClientOperationException("ProfileNotFound", "档案已不存在，请重新选择。");
+        ?? throw new ClientOperationException("ProfileNotFound", "配置已不存在，请重新选择。");
     private static ProbeRecord FindRecord(StoreState state, Guid id) => state.Vault.History.Find(r => r.LocalId == id)
         ?? throw new ClientOperationException("RecordNotFound", "本地记录已不存在。");
     private static string GetKey(StoreState state, RelayProfile profile) => state.Vault.Secrets.TryGetValue(profile.Id, out SecretEntry? secret) &&
         secret.Revision == profile.KeyRevision && secret.Reference == profile.SecretRef ? secret.Key
-        : throw new ClientOperationException("SecretMissing", "无法读取当前档案密钥，请重新输入；不会发送请求。");
+        : throw new ClientOperationException("SecretMissing", "未能读取当前配置的 API Key，请重新输入。未发送请求。");
     private static bool IsActive(LocalRunState state) => state is LocalRunState.Submitting or LocalRunState.SubmissionUnknown or
         LocalRunState.Running or LocalRunState.PollingInterrupted or LocalRunState.IncompatibleResponse;
     private static CancellationTokenSource OperationTimeout(CancellationToken cancellationToken)

@@ -1,5 +1,4 @@
-using System.Runtime.InteropServices;
-using Drawing = System.Drawing;
+﻿using Drawing = System.Drawing;
 using WinForms = System.Windows.Forms;
 
 namespace ProbeDesktop.App.Services;
@@ -138,38 +137,15 @@ public sealed class TrayService : IDisposable, IProblemToastSink
         _image = null;
     }
 
-    /// <summary>自绘蓝底白字“P”图标，与应用蓝白配色一致。</summary>
+    /// <summary>
+    /// 托盘图标：只加载嵌入的同一份多尺寸 ICO（Assets/ProbeDesktop.ico），按系统小图标尺寸选帧。
+    /// 资源缺失或格式损坏时抛出异常，由 TryInitialize 捕获并返回 false（窗口则保持普通最小化到任务栏）。
+    /// </summary>
     private static Drawing.Icon CreateIcon()
     {
-        using var bitmap = new Drawing.Bitmap(32, 32);
-        using (var g = Drawing.Graphics.FromImage(bitmap))
-        {
-            g.SmoothingMode = Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.TextRenderingHint = Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            g.Clear(Drawing.Color.Transparent);
-            using var back = new Drawing.SolidBrush(Drawing.ColorTranslator.FromHtml("#2563EB"));
-            g.FillEllipse(back, 1, 1, 30, 30);
-            using var font = new Drawing.Font("Segoe UI", 17f, Drawing.FontStyle.Bold, Drawing.GraphicsUnit.Pixel);
-            using var format = new Drawing.StringFormat
-            {
-                Alignment = Drawing.StringAlignment.Center,
-                LineAlignment = Drawing.StringAlignment.Center,
-            };
-            g.DrawString("P", font, Drawing.Brushes.White, new Drawing.RectangleF(0, 1, 32, 32), format);
-        }
-
-        var handle = bitmap.GetHicon();
-        try
-        {
-            using var temp = Drawing.Icon.FromHandle(handle);
-            return (Drawing.Icon)temp.Clone();
-        }
-        finally
-        {
-            DestroyIcon(handle);
-        }
+        var info = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/Assets/ProbeDesktop.ico"))
+            ?? throw new InvalidOperationException("托盘图标资源缺失。");
+        using var stream = info.Stream;
+        return new Drawing.Icon(stream, WinForms.SystemInformation.SmallIconSize);
     }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr handle);
 }

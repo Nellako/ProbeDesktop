@@ -133,7 +133,7 @@
         <StackPanel Margin="0,0,0,8" MaxWidth="1100" HorizontalAlignment="Stretch">
             <TextBlock Text="身份识别巡检" Style="{StaticResource PageTitle}" />
             <TextBlock Style="{StaticResource Hint}" Margin="0,2,0,16" TextWrapping="Wrap"
-                       Text="对你勾选的配置和模型，每轮逐个向 BazaarLink 提交官方身份识别（Probe），当前目标结束后才处理下一个。会把完整 API Key 发给 BazaarLink，可能产生费用，报告可能公开；结果是服务基于样本的概率性判断，不是模型真实身份的确定性证明。范围、授权和计时与“连接巡检”相互独立；选择只是偏好，开启和立即巡检前都会列出精确范围并请你确认，旧的授权不会沿用。" />
+                       Text="按已确认的范围逐个向 BazaarLink 提交身份鉴别，不自动重试。设置、授权和排期独立于连接巡检。" />
 
             <!-- 1. 状态、间隔与操作 -->
             <Border Style="{StaticResource Card}" Padding="20,16">
@@ -149,23 +149,15 @@
                         <TextBox x:Name="IdentityIntervalBox" Width="72" MaxLength="3" Margin="0,0,10,6"
                                  Text="{Binding IntervalText, UpdateSourceTrigger=PropertyChanged}"
                                  AutomationProperties.Name="身份识别巡检间隔分钟"
-                                 ToolTip="10 至 480 的整数，默认 30。每轮结束后等待这么久再开始下一轮。开启或进行中也可修改，点“保存间隔”后生效，不会打断当前这一轮。">
-                            <TextBox.InputBindings>
-                                <KeyBinding Key="Return" Command="{Binding SaveIntervalCommand}" />
-                            </TextBox.InputBindings>
-                        </TextBox>
-                        <Button Content="保存间隔(_J)" Margin="0,0,20,6" MinWidth="96" Command="{Binding SaveIntervalCommand}"
-                                AutomationProperties.Name="保存身份识别巡检间隔"
-                                ToolTip="保存后等待计时从现在起重新开始；正在进行的一轮不受影响。已开启时会先列出精确范围让你确认。" />
+                                 ToolTip="10 至 480 分钟，默认 30。确认巡检设置后生效。" />
                         <Button Content="{Binding ToggleText}" Style="{StaticResource PrimaryButton}" Margin="0,0,10,6" MinWidth="168"
-                                Command="{Binding ToggleCommand}" AutomationProperties.Name="开关定时身份识别巡检"
-                                ToolTip="定时默认关闭，独立于连接巡检的开关。开启前会列出精确范围并要求确认。" />
+                                Command="{Binding ToggleCommand}" AutomationProperties.Name="开关自动身份识别巡检"
+                                ToolTip="开启后按已确认的设置排期。" />
                         <Button Content="立即巡检一轮…" Margin="0,0,10,6" Command="{Binding RunOnceCommand}"
                                 AutomationProperties.Name="立即巡检一轮身份识别"
-                                ToolTip="只检测所选范围，不改变定时开关。每次都会重新列出精确范围并要求确认。" />
-                        <Button Content="确认巡检范围…" Margin="0,0,10,6" Command="{Binding ConfirmScopeCommand}"
-                                AutomationProperties.Name="确认身份识别巡检范围"
-                                ToolTip="有待确认目标时可用，无待确认目标时置灰。只保存发往 BazaarLink 的范围授权，不开启巡检、不额外执行或重置计时，也不打断当前轮。" />
+                                ToolTip="使用已确认的范围。每轮另行确认，不改变自动开关。" />
+                        <Button Content="确认巡检设置…(_S)" Margin="0,0,10,6" Command="{Binding ConfirmScopeCommand}"
+                                AutomationProperties.Name="确认身份识别巡检设置" ToolTip="一起保存范围和间隔。" />
                     </WrapPanel>
                     <TextBlock Text="{Binding IntervalHint}" Style="{StaticResource Hint}" AutomationProperties.LiveSetting="Polite" />
                     <TextBlock Text="{Binding Status}" Style="{StaticResource Hint}" Margin="0,8,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"

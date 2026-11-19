@@ -1,35 +1,21 @@
 # Probe Desktop
 
-**第一次使用或看不懂新版状态？请先读 [中文使用手册](使用手册.md)**：从“结果 / 标记读取”两列讲起，包含截图解读、单次测试、定时巡检和常见问题处理。
+非官方 Windows 桌面客户端。管理 AI API 中转站配置和模型，直连测试，或通过 BazaarLink Probe 手动鉴别和定期巡检。当前源码版本 **0.9.4**。先读 [中文使用手册](使用手册.md) 或 [安全说明](SAFETY.md)。
 
-非官方 Windows 桌面客户端，用于管理 AI API 中转站配置、拉取模型列表、直连连接测试，以及调用 BazaarLink 公开 Probe API 进行手动鉴别和身份识别巡检。当前源码版本 **0.9.3**，变更见 [版本说明](RELEASE-NOTES.md)。
+Windows x64 自包含单文件见 [GitHub Releases](https://github.com/Nellako/ProbeDesktop/releases)。下载 `ProbeDesktop.exe` 后直接运行，不必安装 .NET。程序未签名；请核对来源和 SHA-256，不要关闭安全保护。主要在 Windows 11 x64 验证。
 
-支持 OpenAI Responses、Claude Messages、Chat Completions 三种显式协议。无账户体系、无云同步，不自建云后端。第三方判断不是模型真实身份或能力的确定性证明；本软件不提供“降智总分”。
+## 开始使用
 
-## 下载与使用
+1. 添加配置，填入 API 根地址（例如 `https://relay.example.com/v1`）、API Key 和协议。支持 OpenAI Responses、Claude Messages、Chat Completions；不会自动补 `/v1`。
+2. 确认接收方后拉取模型，或手填模型 ID。单次直连测试只发到对应中转站；连接结果与标记读取分开，不代表模型身份。
+3. 两页巡检分别点击“确认巡检设置…”保存范围和间隔。连接巡检默认不重试，可设 0、1、2 次。升级保留开关、范围和历史，但旧授权不再发请求；请重新确认。身份立即巡检每次还需独立确认。
+4. 提交身份鉴别会把**完整 API Key、地址、模型和协议**发给 BazaarLink，可能产生费用，报告可能公开。优先使用低额度、可撤销的测试专用 Key。检测只反映本次样本，证据强度不是准确率。
 
-- **[v0.9.3](https://github.com/Nellako/ProbeDesktop/releases/tag/v0.9.3)** 修复记录窗口筛选框裁字。下载 Windows x64 自包含单文件 [ProbeDesktop.exe](https://github.com/Nellako/ProbeDesktop/releases/download/v0.9.3/ProbeDesktop.exe)，无需安装或另装 .NET；同一发布页提供源码和版本说明。
-- **[v0.9.2](https://github.com/Nellako/ProbeDesktop/releases/tag/v0.9.2)** 已正式发布，标签指向 `afe3bcc`。下载 Windows x64 自包含单文件 [ProbeDesktop.exe](https://github.com/Nellako/ProbeDesktop/releases/download/v0.9.2/ProbeDesktop.exe) 后直接运行，无需解压、安装或另装 .NET 10 运行时。该版本未上传 ZIP 程序包；GitHub 自动生成的源码压缩包不是可运行程序。EXE 的 SHA-256 为 `39cc98180b25dcdbc18fedc0a197378761c804553a31e2c832ba49ef956b1c48`。
-- **[v0.9.1](https://github.com/Nellako/ProbeDesktop/releases/tag/v0.9.1)** 提供 Windows x64 非安装版 ZIP。解压后运行 `ProbeDesktop.exe`，无需另装 .NET 10 运行时。
-- **未签名**：程序可能提示“未知发布者”；请核验来源和 SHA-256，不要关闭系统安全保护。
-
-发布目标为 Windows x64，主要面向 Windows 11 x64；未完整验证 Windows 版本和设备兼容矩阵。未提供 ARM64、Linux 或 macOS 构建。
-
-1. 在“配置管理”添加 API Base URL、Key、协议与默认模型。Base URL 是 API 根地址，例如 `https://relay.example.com/v1`，不填具体请求端点，程序不自动补 `/v1`。
-2. 确认接收方后拉取模型列表，或手填模型 ID；列表请求直接发往中转站，不经过 BazaarLink。
-3. “本地配置检查”不联网；“测试连接”直接调用中转站。约 256 token 的合成英文提示含三个随机标记，独立校验结果不是模型真伪或能力评分，也不是 256k 长上下文测试。
-4. 如需第三方鉴别，阅读外发确认后再提交。**这会将完整 Key、Base URL 与模型信息交给 BazaarLink**，建议使用低额度、可撤销的测试专用 Key。
-5. 两类自动巡检单独选择范围并授权。最小化到托盘后仍运行；标题栏关闭或托盘“退出”才结束程序。
-
-首次空态不自动联网。数据默认保存于 `%LOCALAPPDATA%\ProbeDesktop`，与程序目录分离；不要把运行数据放入云同步目录。可用 `--data-dir <目录>` 指定隔离数据目录。只支持直连公开 HTTPS；不读取系统代理，不提供自定义 HTTP 代理。
-
-## 数据与安全
-
-本地 Key 和运行历史使用 Windows 当前用户 DPAPI 加密。迁移电脑或用户环境请使用“帮助与设置”中的密码保护完整迁移包，不依赖直接复制状态文件。完整迁移包包含真实密钥，不是脱敏报告，不能公开分享。更多费用、授权和迁移边界见 [SAFETY.md](SAFETY.md)。
+首次空态不联网。最小化到托盘不会停止已开启的巡检。退出不撤回已发出的请求。本地数据默认在 `%LOCALAPPDATA%\ProbeDesktop`，与 EXE 分开；可用 `--data-dir` 指定隔离本地目录。密钥和运行历史由 Windows 当前用户的 DPAPI 保护，换电脑请用密码保护的完整迁移包，不要公开分享迁移包。
 
 ## 构建与回归
 
-需要 Windows 和 **.NET 10 SDK**，在仓库根目录运行 PowerShell：
+使用 Windows 和 .NET 10 SDK：
 
 ```powershell
 .\build.ps1 -Task build
@@ -37,17 +23,6 @@
 .\build.ps1 -Task publish -SingleFile
 ```
 
-若 `dotnet` 不在 PATH，向脚本传入 `-Dotnet <SDK可执行文件>`。首次还原和自包含发布可能联网访问官方 NuGet 源下载 SDK 所需组件；自动测试使用隔离目录和模拟 HTTP，不调用真实模型。
+发布脚本只生成本地文件，不会上传。程序集和文件版本为 `0.9.4.0`。回归使用假 HTTP 和隔离目录，不代表真实中转站、线上计费或长周期巡检已验证。
 
-发布脚本先构建并运行控制台回归（不是 `dotnet test`），再在 `artifacts/` 生成本地 EXE、ZIP 和 SHA-256 文件。脚本不会上传构建产物。构建使用新时间戳目录，不覆盖已有产物。产品版本为 `0.9.3`，文件和程序集版本为 `0.9.3.0`。
-
-## 结构与限制
-
-- `src/ProbeDesktop.Core/`：配置、存储、凭据保护、HTTP、安全与迁移。
-- `src/ProbeDesktop.App/`：WPF 客户端与巡检界面。
-- `tests/ProbeDesktop.Tests/`：自动回归测试。
-- [RELEASE-NOTES.md](RELEASE-NOTES.md)：更新内容与验证边界。
-
-真实中转站兼容性、三协议第三方鉴别完整流程、实际账单及长周期巡检未全面验证。软件不是 BazaarLink 官方产品，不代表其背书，不保证报告私密、远端取消或永久接口兼容。
-
-官方参考：[Probe API](https://bazaarlink.ai/probe-api-skill.md)、[服务条款](https://bazaarlink.ai/terms)、[隐私政策](https://bazaarlink.ai/privacy)。本仓库未附加开源许可证；公开可见不等于授予任意复制、修改或再分发许可。
+[版本说明](RELEASE-NOTES.md) · [Probe API](https://bazaarlink.ai/probe-api-skill.md) · [官方判定方法](https://bazaarlink.ai/zh-CN/probe?tab=learn)

@@ -54,23 +54,14 @@ public static class InspectionTests
         return await service.RefreshModelsAsync(profile.Id, ModelConsent(profile));
     }
 
-    private static InspectionConsent ConsentFor(InspectionSnapshot snapshot, int interval)
-        => new(snapshot.Targets.Where(t => t.Target.Models.Count > 0).Select(t => t.Target).ToArray(),
-            interval, DateTimeOffset.UtcNow) { MaxAttempts = 3 };
-
     private static async Task<InspectionSnapshot> EnableAsync(DesktopService service, int interval = 15)
     {
-        InspectionSnapshot snapshot = await SelectAllAsync(service);
-        return await service.SaveInspectionSettingsAsync(
-            new InspectionSettings { Enabled = true, IntervalMinutes = interval }, ConsentFor(snapshot, interval));
+        InspectionSnapshot snapshot = await service.GetInspectionSnapshotAsync();
+        return await Fixtures.ConfirmInspectionAsync(service, AllSelections(snapshot), interval, enable: true);
     }
 
-    private static async Task<InspectionSnapshot> SelectAllAsync(DesktopService service)
-    {
-        InspectionSnapshot snapshot = await service.GetInspectionSnapshotAsync();
-        return await service.SaveInspectionSelectionsAsync(snapshot.Targets.Select(t =>
-            new InspectionSelection(t.Target.ProfileId, true, t.Target.Models)).ToArray());
-    }
+    private static InspectionSelection[] AllSelections(InspectionSnapshot snapshot) => snapshot.Targets.Select(t =>
+        new InspectionSelection(t.Target.ProfileId, t.Target.Models.Count > 0, t.Target.Models)).ToArray();
 
     private static string RequestModel(RecordedRequest request)
     {
@@ -89,6 +80,8 @@ public static class InspectionTests
         InspectionSnapshot blank = await service.GetInspectionSnapshotAsync();
         Check.False(blank.Settings.Enabled, "inspection defaults to disabled");
         Check.Equal(30, blank.Settings.IntervalMinutes, "inspection default interval is 30 minutes");
+        Check.Equal(0, blank.Settings.MaxRetries, "inspection defaults to one actual attempt");
+        Check.Null(blank.LastCompletedAt, "no completion baseline before the first finished round");
         Check.Equal(0, blank.Targets.Count, "no targets before any profile exists");
         Check.Null(blank.LatestRound, "no round recorded yet");
 
@@ -126,40 +119,38 @@ public static class InspectionTests
         using var service = New(tmp.Path, handler);
         RelayProfile profile = await SeedAsync(service, handler, "Primary", RelayBase, ["m1", "m2"]);
         InspectionSnapshot snapshot = await service.GetInspectionSnapshotAsync();
-        snapshot = await SelectAllAsync(service);
         InspectionTarget target = snapshot.Targets[0].Target;
+        InspectionSelection[] draft = AllSelections(snapshot);
 
         int before = handler.Count;
-        InspectionConsent good = new([target], 15, DateTimeOffset.UtcNow) { MaxAttempts = 3 };
-        var cases = new (string Label, InspectionSettings Settings, InspectionConsent? Consent)[]
+        InspectionConsent good = Fixtures.InspectionApproval(snapshot, draft, 15);
+        await Check.ThrowsClientAsync(() => service.SaveInspectionSettingsAsync(new() { Enabled = true, IntervalMinutes = 15 }, good),
+            "ConsentRequired", "toggle cannot adopt even a valid unsubmitted consent");
+        var cases = new (string Label, InspectionConsent Consent, string Code)[]
         {
-            ("enable without consent", new InspectionSettings { Enabled = true, IntervalMinutes = 15 }, null),
-            ("empty scope", new InspectionSettings { Enabled = true, IntervalMinutes = 15 }, good with { Scope = [] }),
-            ("subset of models", new InspectionSettings { Enabled = true, IntervalMinutes = 15 },
-                good with { Scope = [target with { Models = ["m1"] }] }),
-            ("extra model", new InspectionSettings { Enabled = true, IntervalMinutes = 15 },
-                good with { Scope = [target with { Models = ["m1", "m2", "m3"] }] }),
-            ("wrong key revision", new InspectionSettings { Enabled = true, IntervalMinutes = 15 },
-                good with { Scope = [target with { KeyRevision = profile.KeyRevision + 1 }] }),
-            ("wrong base url", new InspectionSettings { Enabled = true, IntervalMinutes = 15 },
-                good with { Scope = [target with { BaseUrl = Relay2 }] }),
-            ("wrong protocol", new InspectionSettings { Enabled = true, IntervalMinutes = 15 },
-                good with { Scope = [target with { Protocol = ApiProtocol.AnthropicMessages }] }),
-            ("consent interval mismatch", new InspectionSettings { Enabled = true, IntervalMinutes = 30 }, good),
-            ("expired consent", new InspectionSettings { Enabled = true, IntervalMinutes = 15 },
-                good with { AcceptedAt = DateTimeOffset.UtcNow.AddMinutes(-11) }),
-            ("future consent", new InspectionSettings { Enabled = true, IntervalMinutes = 15 },
-                good with { AcceptedAt = DateTimeOffset.UtcNow.AddMinutes(5) }),
-            ("out of range interval", new InspectionSettings { Enabled = true, IntervalMinutes = 0 }, good with { IntervalMinutes = 0 })
+            ("empty scope for a nonempty draft", good with { Scope = [] }, "ConsentRequired"),
+            ("subset of models", good with { Scope = [target with { Models = ["m1"] }] }, "ConsentRequired"),
+            ("extra model", good with { Scope = [target with { Models = ["m1", "m2", "m3"] }] }, "ConsentRequired"),
+            ("wrong key revision", good with { Scope = [target with { KeyRevision = profile.KeyRevision + 1 }] }, "ConsentRequired"),
+            ("wrong base url", good with { Scope = [target with { BaseUrl = Relay2 }] }, "ConsentRequired"),
+            ("wrong protocol", good with { Scope = [target with { Protocol = ApiProtocol.AnthropicMessages }] }, "ConsentRequired"),
+            ("expired consent", good with { AcceptedAt = DateTimeOffset.UtcNow.AddMinutes(-11) }, "ConsentRequired"),
+            ("future consent", good with { AcceptedAt = DateTimeOffset.UtcNow.AddMinutes(5) }, "ConsentRequired"),
+            ("out of range interval", good with { IntervalMinutes = 0 }, "InvalidInterval")
         };
-        foreach ((string label, InspectionSettings settings, InspectionConsent? consent) in cases)
-            await Check.ThrowsClientAsync(() => service.SaveInspectionSettingsAsync(settings, consent),
-                label is "out of range interval" ? "InvalidInterval" : "ConsentRequired", "rejects " + label);
+        foreach (var (label, consent, code) in cases)
+            await Check.ThrowsClientAsync(() => service.ConfirmInspectionSettingsAsync(draft, consent), code, "rejects " + label);
 
         Check.Equal(before, handler.Count, "consent validation never reaches the network");
         InspectionSnapshot after = await service.GetInspectionSnapshotAsync();
         Check.False(after.Settings.Enabled, "failed attempts leave inspection disabled");
         Check.Equal(InspectionAuthorizationState.PendingApproval, after.Targets[0].Authorization, "failed attempts grant nothing");
+
+        var dirty = await service.SaveInspectionSettingsAsync(new() { Enabled = true, IntervalMinutes = 15, MaxRetries = 2 });
+        Check.Equal(30, dirty.Settings.IntervalMinutes, "toggle does not adopt draft interval");
+        Check.Equal(0, dirty.Settings.MaxRetries, "toggle does not adopt draft retries");
+        await Check.ThrowsClientAsync(() => service.RunInspectionRoundAsync(), "InspectionNotAuthorized", "on switch alone still cannot send");
+        Check.Equal(before, handler.Count, "toggling with no confirmed plan sends nothing");
 
         // A plain disable never requires consent and a dirty UI interval must not block stopping.
         InspectionSnapshot stopped = await service.SaveInspectionSettingsAsync(
@@ -276,11 +267,15 @@ public static class InspectionTests
         handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson("m1", "m2", "m3"));
         RelayProfile expanded = await service.RefreshModelsAsync(profile.Id, ModelConsent(profile));
         Check.Equal(3, expanded.Models.Count, "cache now holds a third model");
-        await SelectAllAsync(service); // Explicitly select m3 without granting it permission.
+        // The new model may be checked in the UI draft, but the legacy write must not persist it.
+        var beforeDraft = await service.GetInspectionSnapshotAsync();
+        var draft = AllSelections(beforeDraft);
+        await Check.ThrowsClientAsync(() => service.SaveInspectionSelectionsAsync(draft), null,
+            "legacy selection writes cannot persist a draft without confirmation");
 
         InspectionSnapshot snapshot = await service.GetInspectionSnapshotAsync();
         InspectionTargetStatus status = snapshot.Targets.Single(t => t.Target.ProfileId == profile.Id);
-        Check.Equal(InspectionAuthorizationState.PendingApproval, status.Authorization, "new model is not implicitly authorized");
+        Check.Equal(InspectionAuthorizationState.Authorized, status.Authorization, "the saved scope is still fully authorized");
         Check.Equal(2, status.AuthorizedModels.Count, "only the previously approved models stay eligible");
         Check.True(status.AuthorizedModels.Contains("m1") && status.AuthorizedModels.Contains("m2"), "approved subset preserved");
         Check.False(status.AuthorizedModels.Contains("m3"), "new model is not authorized");
@@ -289,9 +284,9 @@ public static class InspectionTests
         handler.EnqueueJson(HttpStatusCode.OK, ChatOk);
         handler.EnqueueJson(HttpStatusCode.OK, ChatOk);
         InspectionRoundSummary round = await service.RunInspectionRoundAsync(InspectionTrigger.Manual);
-        Check.Equal(3, round.Total, "total includes the pending model");
+        Check.Equal(2, round.Total, "an unconfirmed model never reaches the round queue");
         Check.Equal(2, round.Succeeded, "authorized subset still runs");
-        Check.Equal(1, round.Skipped, "pending model is skipped");
+        Check.Equal(0, round.Skipped, "unconfirmed model is not part of the round");
         RecordedRequest[] attempts = handler.Requests.Skip(before).ToArray();
         Check.Equal(2, attempts.Length, "no request for the unapproved model");
         Check.False(attempts.Any(r => RequestModel(r) == "m3"), "m3 was never sent");
@@ -444,7 +439,8 @@ public static class InspectionTests
         RecordedRequest[] secondAttempts = handler.Requests.Skip(beforeSecondRound).ToArray();
         Check.Equal(1, secondAttempts.Length, "only the healthy host is called in the next round");
         Check.Equal("c1", RequestModel(secondAttempts[0]), "the cooled-down host is not retried");
-        Check.Equal(3, second.Skipped, "paused models and the cooled-down host are skipped");
+        Check.Equal(2, second.Total, "a profile already paused before round start is not eligible to be frozen");
+        Check.Equal(1, second.Skipped, "the still-authorized host is frozen but cannot send during cooldown");
         IReadOnlyList<ConnectionTestResult> history = await service.GetConnectionHistoryAsync();
         ConnectionTestResult unauthorized = history.Single(r => r.ModelId == "a1");
         Check.Equal(401, unauthorized.HttpStatusCode, "401 status recorded");
@@ -478,6 +474,104 @@ public static class InspectionTests
     }
 
     // I09 -------------------------------------------------------------------
+    public static async Task ConfigurationRoundTripNeverRevivesQueuedTarget()
+    {
+        using var tmp = new TempDir();
+        var handler = new FakeHttpHandler();
+        using var service = New(tmp.Path, handler);
+        await SeedAsync(service, handler, "First", RelayBase, ["first"]);
+        RelayProfile queued = await SeedAsync(service, handler, "Queued", Relay2, ["queued"]);
+        await EnableAsync(service);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        handler.EnqueueAsync(async (_, ct) =>
+        {
+            entered.SetResult();
+            await release.Task.WaitAsync(ct);
+            return new(HttpStatusCode.OK) { Content = new StringContent(ChatOk, Encoding.UTF8, "application/json") };
+        });
+        var work = service.RunDueInspectionRoundAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            var moved = await service.SaveProfileAsync(queued with { BaseUrl = RelayBase }, null);
+            queued = await service.SaveProfileAsync(moved with { BaseUrl = Relay2 }, null);
+            handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson("queued"));
+            await service.RefreshModelsAsync(queued.Id, ModelConsent(queued));
+            await EnableAsync(service); // Authorizes the next round only.
+        }
+        finally { release.TrySetResult(); }
+        var round = await work;
+        Check.Equal(1, round.Succeeded, "unaffected target completes");
+        Check.Equal(1, round.Skipped, "old frozen target cannot be revived by the same address and newly cached model");
+        Check.Equal(0, round.Failed, "not dispatched is not a failure");
+        Check.Equal("first", RequestModel(handler.Requests.Single(r => r.Method == "POST")), "no POST to the changed target during the old round");
+        handler.EnqueueJson(HttpStatusCode.OK, ChatOk).EnqueueJson(HttpStatusCode.OK, ChatOk);
+        var next = await service.RunInspectionRoundAsync(InspectionTrigger.Manual);
+        Check.Equal(2, next.Succeeded, "freshly confirmed targets can run next time");
+    }
+
+    public static async Task AllCoolingTargetsKeepPreviousRound()
+    {
+        using var tmp = new TempDir();
+        var handler = new FakeHttpHandler();
+        using var service = New(tmp.Path, handler);
+        await SeedAsync(service, handler, "First", RelayBase, ["first"]);
+        await SeedAsync(service, handler, "Second", Relay2, ["second"]);
+        await EnableAsync(service, 10);
+        handler.EnqueueStatus((HttpStatusCode)429, r => r.Headers.RetryAfter = new(TimeSpan.FromMinutes(22)));
+        handler.EnqueueStatus((HttpStatusCode)429, r => r.Headers.RetryAfter = new(TimeSpan.FromMinutes(20)));
+        var round = await service.RunDueInspectionRoundAsync();
+        var saved = await service.GetInspectionSnapshotAsync();
+        Check.Equal(saved.Targets.Min(t => t.RetryNotBefore), saved.RetryNotBefore, "the next runnable host controls the wait");
+        Check.True(saved.RetryNotBefore > saved.LastCompletedAt!.Value.AddMinutes(10), "both hosts outlast the next scheduled slot");
+        // Set a persisted ended time so a real scheduler callback can arrive during both cooldowns.
+        var store = new DesktopStore(tmp.Path, new ReversibleTestProtector());
+        var state = await store.LoadAsync(default);
+        state.Vault.LastInspectionCompletedAt = DateTimeOffset.UtcNow.AddMinutes(-11);
+        await store.SaveAsync(state, default);
+        string file = Path.Combine(tmp.Path, "desktop-state.json");
+        byte[] before = File.ReadAllBytes(file);
+        int requests = handler.Count;
+        await Check.ThrowsClientAsync(() => service.RunDueInspectionRoundAsync(), "ConnectionRateLimited", "all hosts cooling down does not begin a round");
+        Check.Equal(requests, handler.Count, "no outbound work");
+        Check.True(before.SequenceEqual(File.ReadAllBytes(file)), "no empty round written to disk");
+        Check.Equal(round.RoundId, (await service.GetInspectionSnapshotAsync()).LatestRound!.RoundId, "previous round remains visible");
+    }
+
+    public static async Task FinalGateCancellationIsNotAConnectionFailure()
+    {
+        using var tmp = new TempDir();
+        using var cancellation = new CancellationTokenSource();
+        var handler = new FakeHttpHandler();
+        using var service = New(tmp.Path, handler, new CancelBeforeDispatchProtector(cancellation, "connectionHistory", "code", "Interrupted"));
+        var profile = await SeedAsync(service, handler, "First", RelayBase, ["first"]);
+        await EnableAsync(service);
+        var store = new DesktopStore(tmp.Path, new ReversibleTestProtector());
+        var loaded = await store.LoadAsync(default);
+        var now = DateTimeOffset.UtcNow;
+        loaded.Vault.ConnectionHistory = Enumerable.Range(1, 10_000).Select(age => new ConnectionTestResult
+        {
+            ProfileId = profile.Id, ProfileName = profile.Name, ModelId = "first", BaseUrl = profile.BaseUrl,
+            KeyRevision = profile.KeyRevision, Protocol = profile.Protocol, Stage = ConnectionTestStage.ModelResponded,
+            ModelResponded = true, StartedAt = now.AddSeconds(-age), CompletedAt = now.AddSeconds(-age)
+        }).ToList();
+        var originalIds = loaded.Vault.ConnectionHistory.Select(r => r.RecordId).ToArray();
+        await store.SaveAsync(loaded, default);
+        var round = await service.RunDueInspectionRoundAsync(cancellationToken: cancellation.Token);
+        Check.True(cancellation.IsCancellationRequested && round.Cancelled, "round was cancelled after the prewrite");
+        Check.Equal(1, round.Skipped, "no request in this round for the cancelled target");
+        Check.Equal(0, round.Failed, "no bogus failed representative");
+        var after = await service.GetConnectionHistoryAsync();
+        Check.True(after.Select(r => r.RecordId).SequenceEqual(originalIds), "all 10,000 real records keep their IDs and order after cancellation");
+        Check.False(handler.Requests.Any(r => r.Method == "POST"), "zero sends at final gate");
+        handler.EnqueueJson(HttpStatusCode.OK, ChatOk);
+        var completed = await service.RunDueInspectionRoundAsync();
+        var retained = await service.GetConnectionHistoryAsync();
+        Check.Equal(completed.RoundId, retained[0].RoundId!.Value, "a real result takes a history slot");
+        Check.True(retained.Skip(1).Select(r => r.RecordId).SequenceEqual(originalIds.Take(9_999)), "a real result evicts exactly the oldest record");
+    }
+
     // The connection history is independent from the Probe history, carries the documented fields,
     // exports without secrets and supports delete/clear.
     public static async Task I09_HistoryFieldsIsolationExportDelete()
@@ -803,17 +897,17 @@ public static class InspectionTests
         var handler = new FakeHttpHandler();
         using var service = New(tmp.Path, handler);
         await SeedAsync(service, handler, "Primary", RelayBase, ["m1"]);
-        InspectionSnapshot initial = await SelectAllAsync(service);
+        InspectionSnapshot initial = await service.GetInspectionSnapshotAsync();
+        InspectionSelection[] draft = AllSelections(initial);
+        InspectionConsent stale = Fixtures.InspectionApproval(initial, draft, 20);
 
         foreach (int interval in new[] { 0, 1441, -5 })
             await Check.ThrowsClientAsync(
-                () => service.SaveInspectionSettingsAsync(new InspectionSettings { Enabled = true, IntervalMinutes = interval },
-                    ConsentFor(initial, interval)),
+                () => service.ConfirmInspectionSettingsAsync(draft, stale with { IntervalMinutes = interval }),
                 "InvalidInterval", "interval " + interval + " is out of range");
 
         // A fresh consent recorded while the switch is off stores the exact scope but must not enable it.
-        InspectionSnapshot savedOff = await service.SaveInspectionSettingsAsync(
-            new InspectionSettings { Enabled = false, IntervalMinutes = 20 }, ConsentFor(initial, 20));
+        InspectionSnapshot savedOff = await service.ConfirmInspectionSettingsAsync(draft, stale);
         Check.False(savedOff.Settings.Enabled, "consent does not turn the switch on");
         Check.Equal(20, savedOff.Settings.IntervalMinutes, "interval saved");
         Check.Equal(InspectionAuthorizationState.Authorized, savedOff.Targets[0].Authorization, "scope recorded");
@@ -830,11 +924,10 @@ public static class InspectionTests
 
         // Changing the interval needs its own fresh consent; the old interval-scoped grants no longer apply.
         await Check.ThrowsClientAsync(
-            () => service.SaveInspectionSettingsAsync(new InspectionSettings { Enabled = true, IntervalMinutes = 30 },
-                ConsentFor(initial, 20)),
-            "ConsentRequired", "interval change with a stale consent is refused");
-        InspectionSnapshot changed = await service.SaveInspectionSettingsAsync(
-            new InspectionSettings { Enabled = true, IntervalMinutes = 30 }, ConsentFor(initial, 30));
+            () => service.ConfirmInspectionSettingsAsync(draft, stale with { IntervalMinutes = 30 }), null,
+            "interval change with a stale revision is refused");
+        Check.Equal(20, (await service.GetInspectionSnapshotAsync()).Settings.IntervalMinutes, "stale confirmation leaves interval untouched");
+        InspectionSnapshot changed = await Fixtures.ConfirmInspectionAsync(service, draft, 30, enable: true);
         Check.True(changed.Settings.Enabled, "enable at the new interval");
         Check.Equal(30, changed.Settings.IntervalMinutes, "new interval saved");
         Check.Equal(InspectionAuthorizationState.Authorized, changed.Targets[0].Authorization, "new interval is authorized");

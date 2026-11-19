@@ -175,10 +175,7 @@ public static class VerifierProtocolTests
             RelayProfile p = await service.SaveProfileAsync(Fixtures.NewProfile(), Program.Key1);
             await service.RefreshModelsAsync(p.Id, new(p.Id, p.KeyRevision, p.BaseUrl, OutboundPurpose.ModelList,
                 ModelApiEndpoints.Models(p.BaseUrl, p.Protocol), null, DateTimeOffset.UtcNow));
-            await service.SaveInspectionSelectionsAsync([new(p.Id, true, ["ok", "maybe", "bad", "lost"])]);
-            InspectionSnapshot snapshot = await service.GetInspectionSnapshotAsync();
-            await service.SaveInspectionSettingsAsync(new() { Enabled = false },
-                new(snapshot.Targets.Select(t => t.Target).ToArray(), 30, DateTimeOffset.UtcNow) { MaxAttempts = 3 });
+            await Fixtures.ConfirmInspectionAsync(service, [new(p.Id, true, ["ok", "maybe", "bad", "lost"])]);
 
             // Model cache order is not a public contract. Script by actual target, never by assumed queue order.
             for (int i = 0; i < 10; i++) handler.Enqueue(request =>

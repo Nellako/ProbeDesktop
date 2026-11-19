@@ -201,7 +201,7 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="3*" MinWidth="520" />
+                <ColumnDefinition Width="3*" MinWidth="560" />
                 <ColumnDefinition Width="16" />
                 <ColumnDefinition Width="2*" MinWidth="340" />
             </Grid.ColumnDefinitions>
@@ -222,23 +222,26 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="配置" Binding="{Binding ProfileName}" Width="96" MinWidth="72" ElementStyle="{StaticResource TrimCell}" />
-                            <DataGridTextColumn Header="模型" Binding="{Binding ModelId}" Width="*" MinWidth="100" ElementStyle="{StaticResource TrimCell}" />
+                            <DataGridTextColumn Header="配置" Binding="{Binding ProfileName}" Width="88" MinWidth="64" ElementStyle="{StaticResource TrimCell}" />
+                            <DataGridTextColumn Header="模型" Binding="{Binding ModelId}" Width="*" MinWidth="90" ElementStyle="{StaticResource TrimCell}" />
                             <DataGridTextColumn Header="来源" Binding="{Binding Source, Converter={x:Static conv:EnumTextConverter.Instance}}" Width="78" MinWidth="70" ElementStyle="{StaticResource TrimCell}" />
-                            <DataGridTemplateColumn Header="结果" Width="96" MinWidth="86">
+                            <!-- 结果列：「成功（可能）」12px 半粗约 72 宽 + 徽标内边距与单元格内边距，需 ≥110；固定够宽，由「模型」列（*，有最小值与省略）让出空间 -->
+                            <DataGridTemplateColumn Header="结果" Width="118" MinWidth="112">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border Style="{StaticResource BadgeBorder}">
-                                            <TextBlock Style="{StaticResource BadgeText}" Text="{Binding Converter={x:Static conv:ConnectionResultTextConverter.Instance}}" />
+                                            <TextBlock Style="{StaticResource BadgeText}" TextWrapping="NoWrap"
+                                                       Text="{Binding Converter={x:Static conv:ConnectionResultTextConverter.Instance}}" />
                                         </Border>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="标记读取" Width="86" MinWidth="78">
+                            <DataGridTemplateColumn Header="标记读取" Width="90" MinWidth="82">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border Style="{StaticResource ContextBadgeBorder}">
-                                            <TextBlock Style="{StaticResource ContextBadgeText}" Text="{Binding ContextCheck, Converter={x:Static conv:EnumTextConverter.Instance}}" />
+                                            <TextBlock Style="{StaticResource ContextBadgeText}" TextWrapping="NoWrap"
+                                                       Text="{Binding ContextCheck, Converter={x:Static conv:EnumTextConverter.Instance}}" />
                                         </Border>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>

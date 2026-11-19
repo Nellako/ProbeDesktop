@@ -48,6 +48,8 @@ public static class IdentityInspectionText
         IdentityInspectionAttempt attempt, ProbeRecordViewModel? vm, bool awaiting, bool roundBusy)
     {
         var reason = string.IsNullOrEmpty(attempt.Code) ? "" : $"（{CodeText(attempt.Code)}）";
+        if (attempt.State == IdentityInspectionAttemptState.Skipped)
+            return ("已跳过", "none", "未发送请求。" + reason);
         if (vm is not null)
         {
             var (final, state, problem) = ProblemObservations.ClassifyProbe(vm.Record, awaiting);
@@ -59,12 +61,14 @@ public static class IdentityInspectionText
 
             if (state == NotificationObservationState.Healthy)
             {
-                return ("身份一致", "ok", $"鉴别状态：{vm.StateText}；身份判断：{vm.IdentityText}。");
+                var healthy = vm.Record.VerdictStatus == "clean_match" ? "身份一致" : "家族层相符";
+                return (healthy, "ok", $"检测任务：{vm.StateText}；身份结论：{vm.IdentitySummaryText}。");
             }
 
             var tone = problem is "mismatch" or "spoof-suspected" or "failed" or "aborted" ? "bad" : "warn";
-            return (ProblemObservations.Describe(NotificationCategory.Identity, problem), tone,
-                $"鉴别状态：{vm.StateText}；身份判断：{vm.IdentityText}。" + reason);
+            var warnNote = vm.Record.Warnings.Count > 0 ? $"另有 {vm.Record.Warnings.Count} 项行为警示。" : "";
+            return (IdentityStateLabel(vm.Record, problem), tone,
+                $"检测任务：{vm.StateText}；身份结论：{vm.IdentitySummaryText}。{warnNote}" + reason);
         }
 
         return attempt.State switch
@@ -75,9 +79,49 @@ public static class IdentityInspectionText
                 : ("提交结果未知", "warn", "已记录提交意图但没有确认提交成功；不会重新提交，远端可能已开始检测并产生费用。" + reason),
             IdentityInspectionAttemptState.Submitted => ("已提交", "none", "已提交，等待本地记录与查询。" + reason),
             IdentityInspectionAttemptState.Completed => ("已完成", "ok", "已完成，详情见鉴别记录。" + reason),
-            IdentityInspectionAttemptState.Skipped => ("已跳过", "none", "未发送请求。" + reason),
             IdentityInspectionAttemptState.Unknown => ("结果未知", "warn", "没有确认结果；不会重新提交。" + reason),
             _ => (attempt.State.ToString(), "none", reason),
+        };
+    }
+
+    /// <summary>
+    /// 终态但不是“身份一致”时的短标签。把“项目未通过/任务失败”“身份不符”“证据不足或冲突”“行为警示”分开；
+    /// 疑似诱导与疑似伪造自述分开，不把 family_only 说成不符。未覆盖的情况回退到通用说明。
+    /// </summary>
+    private static string IdentityStateLabel(ProbeRecord r, string? problem)
+    {
+        if (r.State == LocalRunState.Completed)
+        {
+            switch (r.VerdictStatus)
+            {
+                case "plain_mismatch": return "家族不符";
+                case "clean_match_submodel_mismatch": return "型号不符";
+                case "spoof_behavior_induced": return "疑似诱导";
+                case "spoof_selfclaim_forged": return "疑似伪造自述";
+                case "clean_match_family_only": return "型号未确定";
+                case "ambiguous": return "证据冲突";
+                case "insufficient_data": return "数据不足";
+                case "clean_match" when r.Warnings.Count > 0: return "身份一致，有行为警示";
+            }
+
+            if (string.IsNullOrEmpty(r.VerdictStatus))
+            {
+                return r.IdentityStatus switch
+                {
+                    "mismatch" => "家族层不符",
+                    "uncertain" => "证据不确定",
+                    "insufficient_data" => "数据不足",
+                    "match" when r.Warnings.Count > 0 => "家族层相符，有行为警示",
+                    _ => ProblemObservations.Describe(NotificationCategory.Identity, problem),
+                };
+            }
+        }
+
+        return r.State switch
+        {
+            LocalRunState.Failed => "检测任务失败",
+            LocalRunState.Aborted => "检测任务已中止",
+            _ => ProblemObservations.Describe(NotificationCategory.Identity, problem),
         };
     }
 

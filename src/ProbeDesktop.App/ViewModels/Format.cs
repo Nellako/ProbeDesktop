@@ -56,7 +56,8 @@ public static class Format
         LocalRunState.Running => "远端检测进行中。本地查询只读取进度，不会重复提交。",
         LocalRunState.PollingInterrupted => "本地查询中断（网络、超时或服务错误）。远端检测可能仍在进行，可手动恢复查询。",
         LocalRunState.Completed => "远端已返回完成结果。",
-        LocalRunState.Failed => "远端返回失败，或请求未发送即已取消。",
+        LocalRunState.Failed when r.RemoteStatus == "failed" => "服务报告任务执行失败。",
+        LocalRunState.Failed => "请求未发送即已取消。",
         LocalRunState.Aborted => "远端返回已中止。",
         LocalRunState.Expired => "服务已无法查询该任务（可能已超过约 30 分钟的保留期）。这不代表任务从未提交。",
         LocalRunState.IncompatibleResponse => "服务响应结构不在当前版本支持范围内，结果不能可靠解释。可稍后手动查询。",
@@ -84,36 +85,85 @@ public static class Format
         }
         : ProbeSourceText(record.Source);
 
+    /// <summary>外层身份判断（identityAssessment.status）。外层只反映“模型家族”层面，不含具体型号；英文代码只放在技术详情里。</summary>
     public static string IdentityText(string? status) => status switch
     {
         null or "" => "—",
-        "match" => "一致（match）",
-        "mismatch" => "不一致（mismatch）",
-        "uncertain" => "不确定（uncertain）",
-        "insufficient_data" => "数据不足（insufficient_data）",
-        _ => status,
+        "match" => "家族层相符",
+        "mismatch" => "家族层不符",
+        "uncertain" => "证据不确定",
+        "insufficient_data" => "数据不足",
+        _ => "未识别的取值：" + status,
     };
 
+    /// <summary>详细判定（verdict.status）的简短中文名，不含英文代码。</summary>
     public static string VerdictText(string? status) => status switch
     {
         null or "" => "—",
-        "clean_match" => "行为与声明一致（clean_match）",
-        "clean_match_family_only" => "仅模型家族一致（clean_match_family_only）",
-        "clean_match_submodel_mismatch" => "家族一致、子型号不一致（clean_match_submodel_mismatch）",
-        "plain_mismatch" => "不一致（plain_mismatch）",
-        "spoof_behavior_induced" => "疑似诱导性伪装行为（spoof_behavior_induced）",
-        "spoof_selfclaim_forged" => "疑似伪造自我声明（spoof_selfclaim_forged）",
-        "ambiguous" => "无法区分（ambiguous）",
-        "insufficient_data" => "数据不足（insufficient_data）",
-        _ => status,
+        "clean_match" => "家族与型号均有据",
+        "clean_match_family_only" => "家族相符，型号未能确定",
+        "clean_match_submodel_mismatch" => "家族相符，但型号不符",
+        "plain_mismatch" => "家族不符",
+        "spoof_behavior_induced" => "疑似诱导行为",
+        "spoof_selfclaim_forged" => "疑似伪造自述",
+        "ambiguous" => "证据冲突，无法判定",
+        "insufficient_data" => "数据不足",
+        _ => "未识别的取值：" + status,
     };
+
+    /// <summary>
+    /// 详细判定的一段中文说明。只说明服务给出的结论含义，不替服务补充“实际型号”：
+    /// <paramref name="trueModel"/> 只用于区分“服务给出了实际型号”和“实际型号未知”。
+    /// </summary>
+    public static string VerdictExplanation(string? status, string? trueModel) => status switch
+    {
+        "clean_match" => "服务认为本次证据同时支持声明的模型家族和具体型号。这是基于本次样本的概率性判断，不是绝对证明。",
+        "clean_match_family_only" => "证据支持声明的模型家族，但不足以确定具体型号。这不等于型号一致，也不等于型号不符。",
+        "clean_match_submodel_mismatch" => string.IsNullOrWhiteSpace(trueModel)
+            ? "模型家族与声明相符，但声明的具体型号没有通过比对。服务没有确认实际型号（只有某个官方基线吻合时才会给出），实际型号未知。"
+            : "模型家族与声明相符，但声明的具体型号没有通过比对。服务给出的实际型号见下方。",
+        "plain_mismatch" => "证据指向与声明不同的模型家族，且没有发现伪装信号。这表示行为与声明的家族不一致，不等于确认对方有意伪装。",
+        "spoof_behavior_induced" => "行为信号像是被诱导得接近声明的家族，而其他指纹信号指向别处。这是“疑似”判断，不是确证。",
+        "spoof_selfclaim_forged" => "行为信号指向别的模型，而端点的表面自述却表现为声明的家族。这是“疑似”判断，不是确证。",
+        "ambiguous" => "现有证据互相冲突，没有稳定的多数指向。这是服务给出的正式结论，不是程序出错；它既不是清白证明，也不是有罪判决，可稍后复测。",
+        "insufficient_data" => "可用的有效证据太少，服务没有给出身份结论。这与“证据冲突”不同，可稍后复测。",
+        _ => "",
+    };
+
+    /// <summary>详细判定对应的徽标色调：success / info / warning / danger。</summary>
+    public static string VerdictTone(string? status) => status switch
+    {
+        "clean_match" => "success",
+        "clean_match_family_only" or "insufficient_data" => "info",
+        "ambiguous" => "warning",
+        "clean_match_submodel_mismatch" or "plain_mismatch"
+            or "spoof_behavior_induced" or "spoof_selfclaim_forged" => "danger",
+        _ => "info",
+    };
+
+    /// <summary>服务给出的 confidence 的中文说明。它只是本次样本证据的强弱，不是准确率或概率。</summary>
+    public static string EvidenceStrengthText(string? confidence)
+    {
+        if (string.IsNullOrWhiteSpace(confidence))
+        {
+            return "服务未给出";
+        }
+
+        return confidence.Trim().ToLowerInvariant() switch
+        {
+            "high" => "高",
+            "medium" or "mid" or "moderate" => "中",
+            "low" => "低",
+            _ => confidence.Trim(),
+        };
+    }
 
     public static string ItemStatusText(string? status) => status switch
     {
         "pending" => "等待",
         "running" => "进行中",
-        "done" => "完成",
-        "error" => "出错",
+        "done" => "已执行",
+        "error" => "执行失败",
         null or "" => "—",
         _ => status,
     };

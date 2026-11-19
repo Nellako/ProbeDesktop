@@ -16,12 +16,14 @@ public sealed record InspectionSettings
 {
     public bool Enabled { get; init; }
     public int IntervalMinutes { get; init; } = 30;
+    public int MaxRetries { get; init; }
 }
 /// <summary>Created only after explicit UI confirmation; scope must still match current cached targets.</summary>
 public sealed record InspectionConsent(IReadOnlyList<InspectionTarget> Scope, int IntervalMinutes, DateTimeOffset AcceptedAt)
 {
-    /// <summary>Explicitly disclosed per-target attempt ceiling. Legacy consent defaults to one and cannot authorize retrying rounds.</summary>
+    /// <summary>Explicit per-target request ceiling, including the initial attempt.</summary>
     public int MaxAttempts { get; init; } = 1;
+    public Guid SettingsRevision { get; init; }
 }
 
 /// <summary>Retain every attempt; represent each exact target by its best completed result in this round, newest on ties.</summary>
@@ -74,12 +76,19 @@ public sealed record InspectionRoundSummary
     public int UnknownCount { get; init; }
     public int Skipped { get; init; }
     public bool Cancelled { get; init; }
+    public int? IntervalMinutes { get; init; }
+    public int? MaxRetries { get; init; }
     public string? CurrentProfileName { get; init; }
     public string? CurrentModelId { get; init; }
 }
 public sealed record InspectionSnapshot(InspectionSettings Settings, IReadOnlyList<InspectionTargetStatus> Targets, InspectionRoundSummary? LatestRound)
 {
     public IReadOnlyList<InspectionSelection> Selections { get; init; } = [];
+    public Guid SettingsRevision { get; init; }
+    public DateTimeOffset? LastCompletedAt { get; init; }
+    // Only set when every selected, authorized target is cooling down.
+    public DateTimeOffset? RetryNotBefore { get; init; }
+    public bool NeedsUpgradeConfirmation { get; init; }
 }
 
 public sealed record InspectionSelection(Guid ProfileId, bool IsSelected, IReadOnlyList<string> SelectedModelIds);
@@ -101,10 +110,13 @@ public interface ILatestResultsService
 public interface IGlobalInspectionService
 {
     Task<InspectionSnapshot> GetInspectionSnapshotAsync(CancellationToken cancellationToken = default);
-    /// <summary>Enabling or changing interval requires fresh exact-scope consent. Disabling never requires consent.</summary>
+    /// <summary>Sets only the switch. It cannot change the confirmed settings or grant permission.</summary>
     Task<InspectionSnapshot> SaveInspectionSettingsAsync(InspectionSettings settings, InspectionConsent? consent = null, CancellationToken cancellationToken = default);
+    Task<InspectionSnapshot> ConfirmInspectionSettingsAsync(IReadOnlyList<InspectionSelection> selections, InspectionConsent consent, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     /// <summary>Core owns bounded per-target connection retries, but no timer. Concurrent rounds are rejected with RoundBusy.</summary>
     Task<InspectionRoundSummary> RunInspectionRoundAsync(InspectionTrigger trigger = InspectionTrigger.Automatic, IProgress<InspectionRoundSummary>? progress = null, CancellationToken cancellationToken = default);
+    Task<InspectionRoundSummary> RunDueInspectionRoundAsync(IProgress<InspectionRoundSummary>? progress = null, CancellationToken cancellationToken = default) =>
+        RunInspectionRoundAsync(InspectionTrigger.Automatic, progress, cancellationToken);
     /// <summary>Bounded local query, newest first; history survives profile deletion.</summary>
     Task<IReadOnlyList<ConnectionTestResult>> GetConnectionHistoryAsync(CancellationToken cancellationToken = default);
     Task DeleteConnectionRecordAsync(Guid recordId, CancellationToken cancellationToken = default);

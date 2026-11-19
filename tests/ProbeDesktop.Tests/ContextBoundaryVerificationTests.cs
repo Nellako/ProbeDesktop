@@ -341,10 +341,7 @@ public static class ContextBoundaryVerificationTests
             using var service = new DesktopService(tmp.Path, Fixtures.Client(handler), new ReversibleTestProtector());
             var profile = await service.SaveProfileAsync(Fixtures.NewProfile(), Program.Key1);
             await service.RefreshModelsAsync(profile.Id, Fixtures.ModelConsent(profile));
-            await service.SaveInspectionSelectionsAsync([new(profile.Id, true, ["model-a"])]);
-            var snapshot = await service.GetInspectionSnapshotAsync();
-            await service.SaveInspectionSettingsAsync(new() { Enabled = true },
-                new(snapshot.Targets.Select(t => t.Target).ToArray(), 30, DateTimeOffset.UtcNow) { MaxAttempts = 3 });
+            await Fixtures.ConfirmInspectionAsync(service, [new(profile.Id, true, ["model-a"])], enable: true);
             handler.EnqueueJson(HttpStatusCode.OK, Body(ApiProtocol.ChatCompletions, "I did not follow the copy instruction"));
             var round = await service.RunInspectionRoundAsync(trigger);
             Check.Equal(2, handler.Count, "one model fetch plus exactly one mismatch attempt");

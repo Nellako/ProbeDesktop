@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- ProbeDesktop 图标唯一源稿（小样 B）。ICO 由 generate-icon.py 按此几何多尺寸重绘；WPF 侧栏的 BrandMarkImage 与此保持同一几何。 -->
+  <rect x="1" y="1" width="30" height="30" rx="8" fill="#2563EB"/>
+  <polyline points="9,20 16.5,12 23.5,20" fill="none" stroke="#FFFFFF" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="9" cy="20" r="3" fill="#C7D7FB"/>
+  <circle cx="23.5" cy="20" r="3" fill="#C7D7FB"/>
+  <circle cx="16.5" cy="12" r="4" fill="#FFFFFF"/>
+</svg>

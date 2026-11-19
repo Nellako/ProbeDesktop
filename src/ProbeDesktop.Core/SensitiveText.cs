@@ -76,7 +76,10 @@ internal sealed class SensitiveText
         Phase = Optional(record.Phase, 256),
         Error = Optional(record.Error, 2048),
         IdentityStatus = Optional(record.IdentityStatus, 64),
-        VerdictStatus = Optional(record.VerdictStatus, 64),
+        // Only documented literals bypass the generic long-token rule. Known credentials
+        // still take priority, and arbitrary diagnostic strings still use full redaction.
+        VerdictStatus = record.VerdictStatus is { } verdict && ProbeResponseAdapter.IsKnownVerdictStatus(verdict)
+            ? CleanAddress(verdict) : Optional(record.VerdictStatus, 64),
         InferredFamily = Optional(record.InferredFamily, 256),
         InferredModel = Optional(record.InferredModel, 256),
         Confidence = Optional(record.Confidence, 128),

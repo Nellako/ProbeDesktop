@@ -28,4 +28,10 @@
     <ProjectReference Include="..\ProbeDesktop.Core\ProbeDesktop.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 多尺寸 ICO（16/20/24/32/48）嵌入程序集，供主窗口标题栏与托盘使用；不设 ApplicationIcon（exe 文件图标不在本次范围）。
+         再生成：python Assets/generate-icon.py（几何同 Assets/ProbeDesktop-mark.svg）。 -->
+    <Resource Include="Assets\ProbeDesktop.ico" />
+  </ItemGroup>
+
 </Project>

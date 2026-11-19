@@ -63,7 +63,7 @@
         </DockPanel>
         <TextBlock Text="{Binding StateExplanation}" Style="{StaticResource Hint}" Margin="0,8,0,0" />
 
-        <!-- 进度：只显示检测项计数与阶段，不推算总百分比 -->
+        <!-- 进度：只显示检测项计数，不推算总百分比 -->
         <Border Background="{StaticResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,12,0,0">
         <StackPanel>
         <WrapPanel>
@@ -71,8 +71,6 @@
                          Visibility="{Binding IsRunning, Converter={StaticResource BoolToVis}}"
                          AutomationProperties.Name="远端检测进行中" />
             <TextBlock Text="{Binding ProgressText}" Margin="0,0,14,0" VerticalAlignment="Center" />
-            <TextBlock Text="{Binding PhaseText}" Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Center"
-                       TextWrapping="Wrap" />
         </WrapPanel>
 
         <!-- 本地查询控制 -->
@@ -100,30 +98,39 @@
             </StackPanel>
         </Border>
 
-        <!-- 服务的身份判断 -->
-        <TextBlock Text="服务的身份判断" Style="{StaticResource SectionTitle}" Margin="0,24,0,8" />
-        <Border Style="{StaticResource InfoCallout}" Margin="0,0,0,12">
-            <TextBlock Style="{StaticResource Hint}" Foreground="{StaticResource TextBrush}"
-                       Text="以下为 BazaarLink 基于本次样本做出的概率性推断，不是模型真实身份或能力的确定性证明。网站已停用综合评分，本程序不显示“降智总分”。" />
+        <!-- 服务的身份判断：中文详细判定优先；英文状态码只在“技术详情”里 -->
+        <TextBlock Text="身份结论" Style="{StaticResource SectionTitle}" Margin="0,24,0,8" />
+        <Border Margin="0,0,0,12" Padding="14,12" CornerRadius="8" Visibility="{Binding HasVerdict, Converter={StaticResource BoolToVis}}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Background" Value="{StaticResource PrimaryLightBrush}" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding VerdictTone}" Value="success">
+                            <Setter Property="Background" Value="{StaticResource SuccessLightBrush}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding VerdictTone}" Value="warning">
+                            <Setter Property="Background" Value="{StaticResource WarningLightBrush}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding VerdictTone}" Value="danger">
+                            <Setter Property="Background" Value="{StaticResource DangerLightBrush}" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <StackPanel>
+                <TextBlock Text="{Binding VerdictHeadline}" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"
+                           AutomationProperties.Name="{Binding VerdictHeadline, StringFormat='身份结论：{0}'}" />
+                <TextBlock Text="{Binding VerdictExplanation}" Margin="0,6,0,0" TextWrapping="Wrap"
+                           Visibility="{Binding VerdictExplanation, Converter={StaticResource HasValueToVis}}" />
+            </StackPanel>
         </Border>
+        <TextBlock Text="服务尚未给出身份结论。" Style="{StaticResource Hint}" Margin="0,0,0,8"
+                   Visibility="{Binding HasVerdict, Converter={StaticResource InverseBoolToVis}}" />
         <ItemsControl ItemsSource="{Binding VerdictFacts}" ItemTemplate="{StaticResource FactTemplate}" Focusable="False" />
+        <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0"
+                   Text="结论仅针对本次样本。外层判断只涉及模型家族，证据强度不是准确率。" />
 
-        <!-- 推理依据 -->
-        <StackPanel Visibility="{Binding HasReasoning, Converter={StaticResource BoolToVis}}">
-            <TextBlock Text="推理依据（服务提供）" Style="{StaticResource SectionTitle}" Margin="0,20,0,8" />
-            <ItemsControl ItemsSource="{Binding Reasoning}" Focusable="False">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <DockPanel Margin="0,2">
-                            <TextBlock DockPanel.Dock="Left" Text="•" Margin="0,0,6,0" Foreground="{StaticResource PrimaryBrush}" />
-                            <TextBox Style="{StaticResource ValueText}" Text="{Binding Mode=OneWay}" AutomationProperties.Name="推理依据" />
-                        </DockPanel>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </StackPanel>
-
-        <!-- 行为警示 -->
+        <!-- 行为警示：与身份判断分开，不单独改变身份结论 -->
         <StackPanel Visibility="{Binding HasWarnings, Converter={StaticResource BoolToVis}}">
             <TextBlock Text="行为警示" Style="{StaticResource SectionTitle}" Margin="0,20,0,8" />
             <ItemsControl ItemsSource="{Binding Warnings}" Focusable="False">
@@ -158,14 +165,36 @@
             <DataGrid.Columns>
                 <DataGridTextColumn Header="分组" Binding="{Binding Group}" Width="90" ElementStyle="{StaticResource MutedCell}" />
                 <DataGridTextColumn Header="检测项" Binding="{Binding Label}" Width="150" ElementStyle="{StaticResource WrapCell}" />
-                <DataGridTextColumn Header="状态" Binding="{Binding StatusText}" Width="64" ElementStyle="{StaticResource WrapCell}" />
-                <DataGridTextColumn Header="结果" Binding="{Binding PassedText}" Width="64" ElementStyle="{StaticResource WrapCell}" />
-                <DataGridTextColumn Header="说明" Binding="{Binding Detail}" Width="*" MinWidth="120" ElementStyle="{StaticResource WrapCell}" />
+                <DataGridTextColumn Header="执行" Binding="{Binding StatusText}" Width="72" ElementStyle="{StaticResource WrapCell}" />
+                <DataGridTextColumn Header="项目结果" Binding="{Binding PassedText}" Width="76" ElementStyle="{StaticResource WrapCell}" />
                 <DataGridTextColumn Header="耗时" Binding="{Binding DurationText}" Width="70" ElementStyle="{StaticResource MutedCell}" />
                 <DataGridTextColumn Header="Token 入/出" Binding="{Binding TokensText}" Width="104" ElementStyle="{StaticResource MutedCell}" />
             </DataGrid.Columns>
         </DataGrid>
         </Border>
+        <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0" Visibility="{Binding HasItems, Converter={StaticResource BoolToVis}}"
+                   Text="“执行”表示该项有没有跑完（“执行失败”是该项没能完成）；“项目结果”是该项自身的检查结果，“未通过”不等于整个任务失败，也不单独决定身份判断。" />
+
+        <!-- 技术详情：默认折叠 -->
+        <Expander Header="技术详情（状态码、诊断与推理原文）" Margin="0,20,0,0" IsExpanded="False"
+                  AutomationProperties.Name="技术详情">
+            <StackPanel Margin="0,8,0,0">
+                <ItemsControl ItemsSource="{Binding TechnicalFacts}" ItemTemplate="{StaticResource FactTemplate}" Focusable="False" />
+                <StackPanel Visibility="{Binding HasReasoning, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="推理依据（服务提供，已脱敏）" FontWeight="SemiBold" Margin="0,12,0,6" />
+                    <ItemsControl ItemsSource="{Binding Reasoning}" Focusable="False">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="0,2">
+                                    <TextBlock DockPanel.Dock="Left" Text="•" Margin="0,0,6,0" Foreground="{StaticResource PrimaryBrush}" />
+                                    <TextBox Style="{StaticResource ValueText}" Text="{Binding Mode=OneWay}" AutomationProperties.Name="推理依据" />
+                                </DockPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </StackPanel>
+        </Expander>
 
         <!-- 记录信息 -->
         <TextBlock Text="记录信息" Style="{StaticResource SectionTitle}" Margin="0,20,0,8" />

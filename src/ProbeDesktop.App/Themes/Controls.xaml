@@ -2,6 +2,42 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:themes="clr-namespace:ProbeDesktop.App.Themes">
 
+    <!-- 侧栏品牌图标（小样 B，独立于线性图标 IconProbe，几何同 Assets/ProbeDesktop-mark.svg，viewBox 0 0 32 32）。 -->
+    <DrawingImage x:Key="BrandMarkImage">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="Transparent">
+                    <GeometryDrawing.Geometry>
+                        <RectangleGeometry Rect="0,0,32,32" />
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing Brush="#2563EB">
+                    <GeometryDrawing.Geometry>
+                        <RectangleGeometry Rect="1,1,30,30" RadiusX="8" RadiusY="8" />
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing Geometry="M9,20 L16.5,12 L23.5,20">
+                    <GeometryDrawing.Pen>
+                        <Pen Brush="White" Thickness="2.7" StartLineCap="Round" EndLineCap="Round" LineJoin="Round" />
+                    </GeometryDrawing.Pen>
+                </GeometryDrawing>
+                <GeometryDrawing Brush="#C7D7FB">
+                    <GeometryDrawing.Geometry>
+                        <GeometryGroup>
+                            <EllipseGeometry Center="9,20" RadiusX="3" RadiusY="3" />
+                            <EllipseGeometry Center="23.5,20" RadiusX="3" RadiusY="3" />
+                        </GeometryGroup>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing Brush="White">
+                    <GeometryDrawing.Geometry>
+                        <EllipseGeometry Center="16.5,12" RadiusX="4" RadiusY="4" />
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
     <!-- ===== 按钮 ===== -->
     <!-- 模板只用 TemplateBinding；各状态颜色由各样式自己的触发器完整定义，避免派生样式继承到不匹配的悬停底色。 -->
     <ControlTemplate x:Key="ButtonTemplate" TargetType="Button">
@@ -640,10 +676,9 @@
                                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
                             <DockPanel>
                                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="20,20,12,8">
-                                    <Border Width="30" Height="30" CornerRadius="8" Background="{StaticResource PrimaryBrush}">
-                                        <Path Data="{StaticResource IconProbe}" Style="{StaticResource LineIcon}" Stroke="White"
-                                              Width="17" Height="17" StrokeThickness="1.8" HorizontalAlignment="Center" />
-                                    </Border>
+                                    <Image Source="{StaticResource BrandMarkImage}" Width="30" Height="30"
+                                           RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True"
+                                           AutomationProperties.Name="品牌图标" />
                                     <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                                         <TextBlock Text="中转模型检测" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" />
                                         <TextBlock Text="Probe 非官方客户端" FontSize="11" Foreground="{StaticResource MutedTextBrush}" Margin="0,1,0,0" />

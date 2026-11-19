@@ -105,7 +105,8 @@ internal sealed class DesktopStore
     {
         RequireWritable();
         StoreState state;
-        if (!File.Exists(_path) && !File.Exists(_path + ".bak")) state = new();
+        bool hasStoredData = File.Exists(_path) || File.Exists(_path + ".bak");
+        if (!hasStoredData) state = new();
         else
         {
             try { state = await ReadAsync(_path, cancellationToken).ConfigureAwait(false); }
@@ -123,9 +124,16 @@ internal sealed class DesktopStore
             }
         }
         bool recovered = state.RecoveredFromBackup;
+        bool upgraded = UpgradeInspectionSettings(state.Vault);
         if (!_initialized || state.IsLegacy)
         {
-            bool changed = false;
+            bool changed = upgraded && hasStoredData;
+            if (state.Vault.LatestInspectionRound is { CompletedAt: null } interruptedConnection && !DesktopService.HasActiveConnectionInspection(DirectoryPath))
+            {
+                state.Vault.LatestInspectionRound = interruptedConnection with
+                { CompletedAt = DateTimeOffset.UtcNow, Cancelled = true, CurrentModelId = null, CurrentProfileName = null };
+                changed = true;
+            }
             if (state.Vault.LatestIdentityInspectionRound is { CompletedAt: null } interrupted)
             {
                 state.Vault.LatestIdentityInspectionRound = interrupted with
@@ -156,11 +164,42 @@ internal sealed class DesktopStore
             if ((changed && !state.IsLegacy) || state.RecoveredFromBackup) await SaveAsync(state, cancellationToken).ConfigureAwait(false);
             _initialized = true;
         }
-        else if (recovered) await SaveAsync(state, cancellationToken).ConfigureAwait(false);
+        else if (recovered || (upgraded && hasStoredData && !state.IsLegacy)) await SaveAsync(state, cancellationToken).ConfigureAwait(false);
         if (recovered)
             throw new ClientOperationException("StorageRecovered",
                 "主存储损坏，已恢复上次可解密备份。备份可能缺少最近的密钥更新或提交记录；请重新加载并核对档案和历史，不要自动重新提交检测。");
         return state;
+    }
+
+    // Version zero is the old authorization contract, even when its attempt limit equals the new default.
+    internal static bool UpgradeInspectionSettings(Vault vault)
+    {
+        bool changed = false;
+        var now = DateTimeOffset.UtcNow;
+        if (vault.InspectionSettingsVersion == 0)
+        {
+            vault.InspectionUpgradePending = vault.InspectionSettings.Enabled || vault.InspectionGrants.Count != 0 ||
+                vault.InspectionSelections.Any(s => s.IsSelected && s.SelectedModelIds.Count != 0);
+            vault.InspectionGrants.Clear();
+            vault.InspectionSettings = vault.InspectionSettings with { MaxRetries = 0 };
+            if (vault.LatestInspectionRound is { Cancelled: false, CompletedAt: { } ended } round && ended >= round.StartedAt && ended <= now)
+            {
+                long ran = (long)round.Succeeded + round.PossibleSuccessCount + round.Failed + round.UnknownCount;
+                if (ran > 0 && ran + round.Skipped == round.Total) vault.LastInspectionCompletedAt = ended;
+            }
+            vault.InspectionSettingsVersion = 1;
+            changed = true;
+        }
+        if (vault.IdentityInspectionSettingsVersion == 0)
+        {
+            vault.IdentityInspectionUpgradePending = vault.IdentityInspectionSettings.Enabled || vault.IdentityInspectionGrants.Count != 0 ||
+                vault.IdentityInspectionSelections.Any(s => s.IsSelected && s.SelectedModelIds.Count != 0);
+            vault.IdentityInspectionGrants.Clear();
+            vault.LastIdentityInspectionCompletedAt = DesktopService.TrustedLegacyIdentityInspectionCompletedAt(vault);
+            vault.IdentityInspectionSettingsVersion = 1;
+            changed = true;
+        }
+        return changed;
     }
 
     private async Task<StoreState> ReadAsync(string path, CancellationToken cancellationToken, bool migrationRead = false)
@@ -266,7 +305,10 @@ internal sealed class DesktopStore
                     vault.InspectionSettings is null || vault.InspectionGrants is null || vault.InspectionSelections is null || vault.InspectionHostDeadlines is null ||
                     vault.IdentityInspectionSettings is null || vault.IdentityInspectionSelections is null || vault.IdentityInspectionGrants is null || vault.NotificationPreferences is null || vault.NotificationMemory is null) throw new JsonException();
                 vault.NotificationMemory.RemoveAll(m => m is not null && !Enum.IsDefined(m.Category));
-                if (vault.IdentityInspectionSettings.IntervalMinutes is < 10 or > 480 ||
+                if (vault.IdentityInspectionSettings.IntervalMinutes is < 10 or > 480 || vault.InspectionSettings.IntervalMinutes is < 10 or > 480 ||
+                    vault.InspectionSettings.MaxRetries is < 0 or > 2 || vault.InspectionSettingsVersion is not (0 or 1) ||
+                    vault.IdentityInspectionSettingsVersion is not (0 or 1) ||
+                    vault.LastInspectionCompletedAt > DateTimeOffset.MaxValue.AddMinutes(-480) || vault.LastIdentityInspectionCompletedAt > DateTimeOffset.MaxValue.AddMinutes(-480) ||
                     vault.IdentityInspectionSelections.Any(s => s is null || s.SelectedModelIds is null || s.SelectedModelIds.Any(m => m is null)) ||
                     vault.IdentityInspectionSelections.Select(s => s.ProfileId).Distinct().Count() != vault.IdentityInspectionSelections.Count ||
                     vault.IdentityInspectionGrants.Any(g => g is null || g.Target is null || !Enum.IsDefined(g.Target.Protocol)) ||
@@ -282,7 +324,7 @@ internal sealed class DesktopStore
                     throw new ClientOperationException("StorageIntegrity", "档案元数据完整性校验失败，已拒绝读取及备份回退；现有文件不会被覆盖。");
                 if (envelope.Profiles.Any(p => !Enum.IsDefined(p.Protocol)) || vault.History.Any(r => !Enum.IsDefined(r.Protocol)) ||
                     vault.ConnectionSettings.Values.Any(r => !Enum.IsDefined(r.Protocol)) || vault.ConnectionResults.Values.Any(r => !Enum.IsDefined(r.Protocol)) ||
-                    vault.ConnectionHistory.Any(r => !Enum.IsDefined(r.Protocol)) || vault.InspectionGrants.Any(g => g.Target is null || g.Target.Models is null || !Enum.IsDefined(g.Target.Protocol)))
+                    vault.ConnectionHistory.Any(r => !Enum.IsDefined(r.Protocol)) || vault.InspectionGrants.Any(g => g is null || g.Target is null || g.Target.Models is null || !Enum.IsDefined(g.Target.Protocol)))
                     throw new ClientOperationException("StorageProtocol", "本地数据包含未知协议，已拒绝读取及覆盖。");
                 if (envelope.Profiles.Select(p => p.Id).Distinct().Count() != envelope.Profiles.Count) throw new JsonException();
                 foreach (RelayProfile profile in envelope.Profiles)
@@ -322,6 +364,7 @@ internal sealed class DesktopStore
             v.InspectionSelections.Count != 0 || v.InspectionGrants.Count != 0 || v.InspectionHostDeadlines.Count != 0 ||
             v.IdentityInspectionSelections.Count != 0 || v.IdentityInspectionGrants.Count != 0 || v.NotificationMemory.Count != 0 ||
             v.LatestInspectionRound is not null || v.LatestIdentityInspectionRound is not null ||
+            v.LastInspectionCompletedAt is not null || v.LastIdentityInspectionCompletedAt is not null ||
             v.InspectionSettings != new InspectionSettings() || v.IdentityInspectionSettings != new IdentityInspectionSettings() ||
             v.NotificationPreferences != new NotificationPreferences())
             throw new ClientOperationException("MigrationTargetNotEmpty", "只能向逻辑空库导入；当前目录含有业务数据或非默认设置。");
@@ -344,8 +387,7 @@ internal sealed class DesktopStore
         {
             if (applyRetention)
             {
-                state.Vault.ConnectionHistory = state.Vault.ConnectionHistory.Where(r => r.StartedAt >= DateTimeOffset.UtcNow.AddDays(-30))
-                    .OrderByDescending(r => r.StartedAt).Take(10_000).ToList();
+                DesktopService.TrimConnectionHistory(state);
                 DesktopService.ConvergeIdentityInspectionState(state);
                 state.Vault.NotificationMemory = state.Vault.NotificationMemory.OrderByDescending(m => m.UpdatedAt).Take(4000).ToList();
             }
@@ -461,6 +503,10 @@ internal sealed class Vault
     public List<IdentityInspectionSelection> IdentityInspectionSelections { get; set; } = [];
     public List<IdentityInspectionGrant> IdentityInspectionGrants { get; set; } = [];
     public IdentityInspectionRoundSummary? LatestIdentityInspectionRound { get; set; }
+    public DateTimeOffset? LastIdentityInspectionCompletedAt { get; set; }
+    public int IdentityInspectionSettingsVersion { get; set; }
+    public Guid IdentityInspectionSettingsRevision { get; set; }
+    public bool IdentityInspectionUpgradePending { get; set; }
     public NotificationPreferences NotificationPreferences { get; set; } = new();
     public List<NotificationMemory> NotificationMemory { get; set; } = [];
     public InspectionSettings InspectionSettings { get; set; } = new();
@@ -469,6 +515,10 @@ internal sealed class Vault
     public Dictionary<string, DateTimeOffset> InspectionHostDeadlines { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Guid InspectionNonce { get; set; } = Guid.NewGuid();
     public InspectionRoundSummary? LatestInspectionRound { get; set; }
+    public DateTimeOffset? LastInspectionCompletedAt { get; set; }
+    public int InspectionSettingsVersion { get; set; }
+    public Guid InspectionSettingsRevision { get; set; }
+    public bool InspectionUpgradePending { get; set; }
 }
 
 internal sealed record SecretEntry(string Key, int Revision, string Reference);

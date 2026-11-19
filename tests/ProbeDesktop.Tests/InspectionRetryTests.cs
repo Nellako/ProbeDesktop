@@ -8,17 +8,37 @@ namespace ProbeDesktop.Tests;
 public static class InspectionRetryTests
 {
     private const string Ok = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"OK\"}}]}";
-    private static async Task<RelayProfile> Seed(DesktopService service, FakeHttpHandler handler)
+    private static async Task<RelayProfile> Seed(DesktopService service, FakeHttpHandler handler, int attempts = 3)
     {
         RelayProfile p = await service.SaveProfileAsync(Fixtures.NewProfile(), Program.Key1);
         handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson("m"));
         p = await service.RefreshModelsAsync(p.Id, new(p.Id, p.KeyRevision, p.BaseUrl, OutboundPurpose.ModelList,
             ModelApiEndpoints.Models(p.BaseUrl, p.Protocol), null, DateTimeOffset.UtcNow));
-        await service.SaveInspectionSelectionsAsync([new(p.Id, true, ["m"])]);
-        InspectionSnapshot snapshot = await service.GetInspectionSnapshotAsync();
-        await service.SaveInspectionSettingsAsync(new() { Enabled = true },
-            new(snapshot.Targets.Select(t => t.Target).ToArray(), 30, DateTimeOffset.UtcNow) { MaxAttempts = 3 });
+        await Fixtures.ConfirmInspectionAsync(service, [new(p.Id, true, ["m"])], attempts: attempts, enable: true);
         return p;
+    }
+
+    public static async Task ConfirmedRetryChoicesPersist()
+    {
+        foreach (int attempts in new[] { 1, 2, 3 })
+        {
+            using var tmp = new TempDir();
+            var handler = new FakeHttpHandler();
+            using (var writer = new DesktopService(tmp.Path, Fixtures.Client(handler), new ReversibleTestProtector()))
+                await Seed(writer, handler, attempts);
+            using var service = new DesktopService(tmp.Path, Fixtures.Client(handler), new ReversibleTestProtector());
+            var snapshot = await service.GetInspectionSnapshotAsync();
+            Check.Equal(attempts - 1, snapshot.Settings.MaxRetries, "reopened setting stores retries, not attempts");
+            foreach (int invalid in new[] { -1, 0, 4 })
+                await Check.ThrowsClientAsync(() => service.ConfirmInspectionSettingsAsync(snapshot.Selections,
+                    Fixtures.InspectionApproval(snapshot, snapshot.Selections, attempts: invalid)), "InvalidRetries", "attempts outside 1..3 rejected");
+            Check.Equal(1, handler.Count, "confirmation, read and rejection sent nothing beyond model fetch");
+            for (int i = 0; i < 3; i++) handler.EnqueueStatus(HttpStatusCode.ServiceUnavailable);
+            var round = await service.RunInspectionRoundAsync();
+            Check.Equal(attempts, handler.Count - 1, "exact confirmed maximum across persistent restart");
+            Check.Equal(1, round.Failed, "failed target counted once");
+            Check.Equal(attempts, (await service.GetConnectionHistoryAsync()).Count, "only dispatched attempts in history");
+        }
     }
 
     public static async Task BoundedAttemptsAndFinalResults()
@@ -86,21 +106,35 @@ public static class InspectionRetryTests
 
     public static async Task ChangedScopeStopsRetries()
     {
-        foreach (string change in new[] { "selection", "key", "disable" })
+        foreach (string change in new[] { "cache", "key", "disable" })
         {
             using var tmp = new TempDir();
             var handler = new FakeHttpHandler();
             using var service = new DesktopService(tmp.Path, Fixtures.Client(handler), new ReversibleTestProtector());
             RelayProfile profile = await Seed(service, handler);
-            handler.Enqueue(_ =>
+            TaskCompletionSource dispatched = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            handler.EnqueueAsync(async (_, ct) =>
             {
-                if (change == "selection") service.SaveInspectionSelectionsAsync([new(profile.Id, false, ["m"])]).GetAwaiter().GetResult();
-                else if (change == "key") service.SaveProfileAsync(profile, Program.Key2).GetAwaiter().GetResult();
-                else service.SaveInspectionSettingsAsync(new() { Enabled = false }).GetAwaiter().GetResult();
+                dispatched.SetResult();
+                await release.Task.WaitAsync(ct);
                 return new(HttpStatusCode.OK) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
             });
-            InspectionRoundSummary round = await service.RunInspectionRoundAsync();
-            Check.Equal(2, handler.Count, change + " stops subsequent attempts");
+            var running = service.RunInspectionRoundAsync();
+            await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                if (change == "cache")
+                {
+                    handler.EnqueueJson(HttpStatusCode.OK, Fixtures.ModelsJson());
+                    await service.RefreshModelsAsync(profile.Id, Fixtures.ModelConsent(profile)).WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                else if (change == "key") await service.SaveProfileAsync(profile, Program.Key2).WaitAsync(TimeSpan.FromSeconds(5));
+                else await service.SaveInspectionSettingsAsync(new() { Enabled = false }).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally { release.TrySetResult(); }
+            InspectionRoundSummary round = await running.WaitAsync(TimeSpan.FromSeconds(5));
+            Check.Equal(1, handler.Requests.Count(r => r.Method == "POST"), change + " stops subsequent attempts");
             var history = await service.GetConnectionHistoryAsync();
             Check.Equal(1, history.Count, "completed attempt stays in history");
             Check.True(history[0].Stage is ConnectionTestStage.PossibleSuccess or ConnectionTestStage.Unknown,
@@ -157,10 +191,10 @@ public static class InspectionRetryTests
             Check.Equal(1, InspectionRoundResults.FinalConnections(history, round.RoundId).Count, "one final row for the target");
             ConnectionTestResult first = history.OrderBy(r => r.CompletedAt).First();
             ConnectionTestResult final = InspectionRoundResults.FinalConnections(history, round.RoundId).Single();
-            Check.True(first.Message.Contains("本轮同目标最多三次调用", StringComparison.Ordinal),
+            Check.True(first.Message.Contains("本轮同目标最多发 3 次请求", StringComparison.Ordinal),
                 "the intermediate 5xx record discloses the retry envelope");
             Check.Equal((int)authStatus, final.HttpStatusCode, "final record is the auth failure");
-            Check.NotContains(final.Message, "本轮同目标最多三次调用", "auth/rate-limit messages are not overwritten by the retry envelope");
+            Check.NotContains(final.Message, "本轮同目标最多", "auth/rate-limit messages are not overwritten by the retry envelope");
             Check.Equal(InspectionAuthorizationState.Paused,
                 (await service.GetInspectionSnapshotAsync()).Targets.Single().Authorization, "auth failure pauses the profile");
             await Check.ThrowsClientAsync(() => service.RunInspectionRoundAsync(InspectionTrigger.Manual), "InspectionNotAuthorized",
@@ -168,27 +202,30 @@ public static class InspectionRetryTests
         }
     }
 
-    /// <summary>界面静态文案（帮助页、连接巡检页）只承诺请求次数的 3 倍，不承诺费用上限。</summary>
+    /// <summary>界面静态文案披露可选重试、默认与请求次数，不承诺费用上限。</summary>
     public static async Task DisclosureCopyPromisesNoCostCeiling()
     {
         await Task.CompletedTask;
         string repo = RepositoryRoot();
-        foreach ((string file, string needle, bool fullDisclosure) in new[]
+        foreach ((string file, bool fullDisclosure) in new[]
         {
-            (Path.Combine(repo, "src", "ProbeDesktop.App", "Views", "InspectionView.xaml"), "最多再重试两次（共 3 次）", false),
-            (Path.Combine(repo, "src", "ProbeDesktop.App", "Views", "HelpView.xaml"), "最多再重试两次", true),
+            (Path.Combine(repo, "src", "ProbeDesktop.App", "Views", "InspectionView.xaml"), false),
+            (Path.Combine(repo, "src", "ProbeDesktop.App", "Views", "HelpView.xaml"), true),
         })
         {
             string name = Path.GetFileName(file);
             string text = File.ReadAllText(file);
-            Check.Contains(text, needle, name + " still discloses the bounded retries");
-            Check.Contains(text, "3 倍", name + " states the worst-case request multiplier");
+            Check.Contains(text, "最大重试", name + " distinguishes retries from total requests");
+            Check.NotContains(text, "最多再重试两次（共 3 次）", name + " must not imply every plan has three attempts");
             Check.NotContains(text, "费用上限为", name + " must not promise a cost ceiling");
             Check.NotContains(text, "费用上限是", name + " must not promise a cost ceiling");
             Check.NotContains(text, "费用估算也按", name + " must not publish a cost estimate");
-            Check.Contains(text, "实际费用按中转站计价", name + " defers the real cost to the relay's pricing");
             Check.NotContains(text, "单次请求量的 3 倍", name + " must not multiply the request volume by the wrong base");
             if (!fullDisclosure) continue;
+            Check.Contains(text, "0、1、2 次", name + " enumerates the available retry values");
+            Check.Contains(text, "默认 0", name + " explains the safe default");
+            Check.Contains(text, "1、2、3 次请求", name + " distinguishes actual attempts from selected retries");
+            Check.Contains(text, "不是费用上限", name + " disclaims a price cap");
             Check.Contains(text, "旧授权", name + " states legacy authorization needs re-approval");
             Check.Contains(text, "身份识别巡检", name + " keeps identity inspection distinguished");
         }
@@ -204,28 +241,54 @@ public static class InspectionRetryTests
 
     public static async Task LegacyAuthorizationRequiresFreshConsent()
     {
+        foreach (bool explicitOneAttempt in new[] { false, true })
+        {
         using var tmp = new TempDir();
         var protector = new ReversibleTestProtector();
         var handler = new FakeHttpHandler();
-        using (var service = new DesktopService(tmp.Path, Fixtures.Client(handler), protector)) await Seed(service, handler);
+        using (var service = new DesktopService(tmp.Path, Fixtures.Client(handler), protector))
+        {
+            await Seed(service, handler, attempts: 1);
+            handler.EnqueueJson(HttpStatusCode.OK, Ok);
+            await service.RunInspectionRoundAsync();
+        }
         string path = Path.Combine(tmp.Path, "desktop-state.json");
         JsonNode root = JsonNode.Parse(File.ReadAllText(path))!;
         JsonNode vault = JsonNode.Parse(protector.Unprotect(Convert.FromBase64String(root["protectedState"]!.GetValue<string>())))!;
-        root["schemaVersion"] = 2; // Previous one-attempt release, before the schema-3 safety contract.
-        foreach (JsonNode? grant in vault["inspectionGrants"]!.AsArray()) grant!.AsObject().Remove("maxAttempts");
+        vault.AsObject().Remove("inspectionSettingsRevision");
+        vault.AsObject().Remove("inspectionSettingsVersion");
+        vault.AsObject().Remove("inspectionUpgradePending");
+        vault.AsObject().Remove("lastInspectionCompletedAt");
+        vault["inspectionSettings"]!.AsObject().Remove("maxRetries");
+        vault["inspectionSettings"]!["intervalMinutes"] = 47;
+        vault["latestInspectionRound"]!.AsObject().Remove("intervalMinutes");
+        vault["latestInspectionRound"]!.AsObject().Remove("maxRetries");
+        if (!explicitOneAttempt) root["schemaVersion"] = 2;
+        foreach (JsonNode? grant in vault["inspectionGrants"]!.AsArray())
+        {
+            grant!["intervalMinutes"] = 47;
+            if (!explicitOneAttempt) grant.AsObject().Remove("maxAttempts");
+        }
         root["protectedState"] = Convert.ToBase64String(protector.Protect(Encoding.UTF8.GetBytes(vault.ToJsonString())));
         File.WriteAllText(path, root.ToJsonString());
         using var reopened = new DesktopService(tmp.Path, Fixtures.Client(handler), protector);
         var snapshot = await reopened.GetInspectionSnapshotAsync();
         Check.True(snapshot.Settings.Enabled, "old preference preserved without granting sends");
+        Check.True(snapshot.NeedsUpgradeConfirmation, "old plan requires confirmation even with a one-attempt grant");
+        Check.Equal(47, snapshot.Settings.IntervalMinutes, "legacy interval survives");
+        Check.Equal(0, snapshot.Settings.MaxRetries, "legacy plan does not acquire additional retries");
+        Check.Equal("m", snapshot.Selections.Single().SelectedModelIds.Single(), "legacy selection survives");
+        Check.Equal(1, (await reopened.GetConnectionHistoryAsync()).Count, "old history survives");
+        Check.Equal(snapshot.LatestRound!.CompletedAt, snapshot.LastCompletedAt, "genuine previous completion survives migration");
         Check.Equal(InspectionAuthorizationState.PendingApproval, snapshot.Targets.Single().Authorization, "old one-attempt grant is pending");
         foreach (InspectionTrigger trigger in Enum.GetValues<InspectionTrigger>())
             await Check.ThrowsClientAsync(() => reopened.RunInspectionRoundAsync(trigger), "InspectionNotAuthorized", "legacy grant cannot send");
-        InspectionConsent legacy = new(snapshot.Targets.Select(t => t.Target).ToArray(), 30, DateTimeOffset.UtcNow);
-        await Check.ThrowsClientAsync(() => reopened.SaveInspectionSettingsAsync(new() { Enabled = true }, legacy), "ConsentRequired", "old consent cannot silently gain retries");
-        await reopened.SaveInspectionSettingsAsync(new() { Enabled = true }, legacy with { MaxAttempts = 3 });
+        Check.Equal(2, handler.Count, "legacy grant blocks both triggers without HTTP");
+        await Fixtures.ConfirmInspectionAsync(reopened, snapshot.Selections, 47, attempts: 1);
+        Check.False((await reopened.GetInspectionSnapshotAsync()).NeedsUpgradeConfirmation, "fresh exact confirmation clears the upgrade gate");
         handler.EnqueueJson(HttpStatusCode.OK, Ok);
         Check.Equal(1, (await reopened.RunInspectionRoundAsync()).Succeeded, "fresh explicit approval works");
+        }
     }
 
     private sealed class CompletionProtector(CancellationTokenSource cancellation, int cancelAfter) : ISecretProtector

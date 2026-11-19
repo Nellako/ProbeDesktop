@@ -22,27 +22,13 @@ public sealed partial class DesktopService
         };
     }).Where(t => t.Models.Count > 0).ToArray();
 
-    private static void ApplyInspectionConsent(StoreState state, int intervalMinutes, InspectionConsent? consent)
+    public async Task<InspectionSnapshot> ConfirmInspectionSettingsAsync(IReadOnlyList<InspectionSelection> selections, InspectionConsent consent, CancellationToken cancellationToken = default)
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        InspectionTarget[] current = SelectedTargets(state);
-        if (consent is null || consent.MaxAttempts != InspectionRoundResults.MaxAttempts || consent.Scope is null || consent.IntervalMinutes != intervalMinutes ||
-            consent.AcceptedAt < now.AddMinutes(-10) || consent.AcceptedAt > now.AddSeconds(30) || current.Length == 0 ||
-            consent.Scope.Count != current.Length || consent.Scope.Any(t => t is null || t.Models is null) ||
-            consent.Scope.Select(t => t.ProfileId).Distinct().Count() != current.Length ||
-            current.Any(t => !consent.Scope.Any(c => SameTarget(c, t))))
-            throw new ClientOperationException("ConsentRequired", "请重新确认当前选中配置、密钥版本、协议、模型集合、间隔，以及每目标最多三次调用和额外费用。");
-        // An invalid target is not granted, but cannot prevent other valid selected targets from running.
-        state.Vault.InspectionGrants = current.Select(t => t with
-        {
-            Models = t.Models.Where(m => ValidateConnection(state, t.ProfileId, m).Passed).ToArray()
-        }).Where(t => t.Models.Count > 0).Select(t => new InspectionGrant(t, consent.AcceptedAt, intervalMinutes, MaxAttempts: consent.MaxAttempts)).ToList();
-    }
-
-    public async Task<InspectionSnapshot> SaveInspectionSelectionsAsync(IReadOnlyList<InspectionSelection> selections, CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
+        ThrowIfDisposed(); ArgumentNullException.ThrowIfNull(consent);
         ArgumentNullException.ThrowIfNull(selections);
+        RequireInspectionInterval(consent.IntervalMinutes);
+        if (consent.MaxAttempts is < 1 or > InspectionRoundResults.MaxAttempts)
+            throw new ClientOperationException("InvalidRetries", "最大重试次数必须为 0、1 或 2。");
         await _store.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -57,30 +43,37 @@ public sealed partial class DesktopService
                     throw new ClientOperationException("InvalidSelection", "只能选择当前成功缓存中的模型。");
                 saved.Add(selection with { SelectedModelIds = selection.SelectedModelIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() });
             }
-            // Selection never grants permission, and changing it never cancels an already dispatched request.
             state.Vault.InspectionSelections = saved;
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            InspectionTarget[] current = SelectedTargets(state);
+            if (consent.SettingsRevision != state.Vault.InspectionSettingsRevision || consent.Scope is null ||
+                consent.AcceptedAt < now.AddMinutes(-10) || consent.AcceptedAt > now.AddSeconds(30) ||
+                consent.Scope.Count != current.Length || consent.Scope.Any(t => t is null || t.Models is null) ||
+                consent.Scope.Select(t => t.ProfileId).Distinct().Count() != current.Length ||
+                current.Any(t => !consent.Scope.Any(c => SameTarget(c, t))))
+                throw new ClientOperationException("ConsentRequired", "巡检设置或目标已变化，或确认已过期。请重新确认巡检设置。");
+            foreach (var target in current)
+                foreach (var model in target.Models)
+                {
+                    var validation = ValidateConnection(state, target.ProfileId, model);
+                    if (!validation.Passed) throw new ClientOperationException(validation.Code, validation.Message);
+                }
+            state.Vault.InspectionGrants = current.Select(t => new InspectionGrant(t, consent.AcceptedAt, consent.IntervalMinutes, MaxAttempts: consent.MaxAttempts)).ToList();
+            state.Vault.InspectionSettings = state.Vault.InspectionSettings with { IntervalMinutes = consent.IntervalMinutes, MaxRetries = consent.MaxAttempts - 1 };
+            state.Vault.InspectionSettingsRevision = Guid.NewGuid();
+            state.Vault.InspectionSettingsVersion = 1;
+            state.Vault.InspectionUpgradePending = false;
             await _store.SaveAsync(state, cancellationToken).ConfigureAwait(false);
             return InspectionView(state);
         }
         finally { _store.Gate.Release(); }
     }
 
-    public async Task<InspectionSnapshot> SaveInspectionIntervalAsync(int intervalMinutes, InspectionConsent? consent = null, CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
-        RequireInspectionInterval(intervalMinutes);
-        await _store.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            StoreState state = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
-            if (consent is not null) ApplyInspectionConsent(state, intervalMinutes, consent);
-            state.Vault.InspectionSettings = state.Vault.InspectionSettings with { IntervalMinutes = intervalMinutes };
-            // Deliberately retain nonce and the active round's cancellation source.
-            await _store.SaveAsync(state, cancellationToken).ConfigureAwait(false);
-            return InspectionView(state);
-        }
-        finally { _store.Gate.Release(); }
-    }
+    public Task<InspectionSnapshot> SaveInspectionSelectionsAsync(IReadOnlyList<InspectionSelection> selections, CancellationToken cancellationToken = default) =>
+        throw new ClientOperationException("ConsentRequired", "请统一确认并保存巡检设置。");
+
+    public Task<InspectionSnapshot> SaveInspectionIntervalAsync(int intervalMinutes, InspectionConsent? consent = null, CancellationToken cancellationToken = default) =>
+        throw new ClientOperationException("ConsentRequired", "请统一确认并保存巡检设置。");
 
     public async Task<LatestModelResults> GetLatestResultsAsync(Guid profileId, string modelId, CancellationToken cancellationToken = default)
     {

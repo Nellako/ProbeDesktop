@@ -135,9 +135,12 @@ public sealed partial class DesktopService : IMigrationService
     {
         SanitizeMigrationSnapshot(state);
         Vault v = state.Vault;
+        DesktopStore.UpgradeInspectionSettings(v);
         v.InspectionSettings = v.InspectionSettings with { Enabled = false };
         v.IdentityInspectionSettings = v.IdentityInspectionSettings with { Enabled = false };
         v.InspectionGrants.Clear(); v.IdentityInspectionGrants.Clear(); v.InspectionNonce = Guid.NewGuid();
+        v.InspectionSettingsRevision = Guid.NewGuid(); v.IdentityInspectionSettingsRevision = Guid.NewGuid();
+        v.InspectionUpgradePending = false; v.IdentityInspectionUpgradePending = false;
         DateTimeOffset now = DateTimeOffset.UtcNow;
         if (v.LatestInspectionRound is { CompletedAt: null } round)
             v.LatestInspectionRound = round with { CompletedAt = now, Cancelled = true, CurrentProfileName = null, CurrentModelId = null,

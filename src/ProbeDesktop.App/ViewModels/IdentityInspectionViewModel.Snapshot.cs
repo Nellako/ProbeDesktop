@@ -21,8 +21,7 @@ public sealed partial class IdentityInspectionViewModel
             .ToList();
 
     /// <summary>
-    /// 启动时只执行一次：读取已保存设置。已开启且所选范围内有已授权目标时恢复定时计时，但不立即发请求：
-    /// 第一轮在一个完整间隔之后才开始；不重放上次未完成的剩余目标，也不重新提交未确定的意图。
+    /// 启动时读取已确认设置，再按上轮完成时间恢复排期；不重新提交未确定的意图。
     /// 上次中断的旧轮由 Core 首次加载时以 ApplicationInterrupted 收尾，App 不再额外调用 End。
     /// 既有远端任务的只读查询由 MainViewModel 通过 ProbeRunCoordinator 恢复（GET）。
     /// </summary>
@@ -48,34 +47,23 @@ public sealed partial class IdentityInspectionViewModel
         }
 
         _loaded = true;
-        if (!snap.Settings.Enabled)
-        {
-            Status = "定时身份识别巡检未开启。请先勾选要检测的配置和模型，再点“开启定时身份识别巡检”；开启时会列出精确范围并请你确认。";
-            return;
-        }
-
-        if (AuthorizedSelectedCount(snap) == 0)
-        {
-            Status = "定时身份识别巡检已保存为开启，但所选范围内没有已授权的目标（或尚未选择），未发送任何请求。请选择模型并重新确认。";
-            return;
-        }
-
-        Status = $"已按已授权范围恢复定时计时：第一轮在 {_savedInterval} 分钟后开始，启动时不会立即提交，也不会补交上次未完成的目标。";
-        StartScheduler(immediate: false);
+        Status = "";
+        RefreshSchedule();
     }
 
     private async Task<IdentityInspectionSnapshot?> FetchAsync(bool allowPrune)
     {
         try
         {
+            int epoch = _snapshotEpoch;
             var snap = await _service!.GetIdentityInspectionSnapshotAsync(_lifetime.Token);
             if (_disposed)
             {
                 return null;
             }
 
-            ApplySnapshot(snap, reloadSelection: !_selectionDirty && !_selectionSaving, allowPrune);
-            return snap;
+            if (epoch == _snapshotEpoch) ApplySnapshot(snap, reloadSelection: !_selectionDirty, allowPrune);
+            return _snapshot;
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -97,10 +85,6 @@ public sealed partial class IdentityInspectionViewModel
         var oldSaved = _savedInterval;
         var minutes = snap.Settings.IntervalMinutes;
         _savedInterval = minutes;
-        if (minutes != oldSaved)
-        {
-            _scheduler.TrySetInterval(minutes);
-        }
 
         // 用户没改过输入框（仍等于旧的已保存值）或首次加载时跟随；正在编辑的内容不被覆盖。
         if (first || _intervalText.Trim() == oldSaved.ToString(CultureInfo.InvariantCulture))
@@ -118,12 +102,6 @@ public sealed partial class IdentityInspectionViewModel
 
         var profiles = CurrentProfiles();
         _selection.Reconcile(profiles.Select(p => (p.Id, (IReadOnlyCollection<string>)p.Models)));
-        if (allowPrune && reloadSelection && !_selection.IsSameAs(saved))
-        {
-            // 修剪后与 Core 保存的不一致：整体回写，保证已消失的模型不会在重新出现时被复活。
-            _selectionDirty = true;
-            SchedulePersist();
-        }
 
         if (!_busy)
         {
@@ -134,6 +112,7 @@ public sealed partial class IdentityInspectionViewModel
         RecalcSummary();
         SyncRows();
         OnRoundChanged();
+        RefreshSchedule();
     }
 
     private void SyncNodes(IReadOnlyList<ProfileView> profiles, IdentityInspectionSnapshot snap)
@@ -265,6 +244,7 @@ public sealed partial class IdentityInspectionViewModel
     /// <summary>按本地选择与快照里的授权情况重算概览（选择变化后立即调用，不等待保存完成）。</summary>
     private void RecalcSummary()
     {
+        _selectionDirty = _snapshot is { } saved && !_selection.IsSameAs(saved.Selections.Select(x => new SelectionEntry(x.ProfileId, x.IsSelected, x.SelectedModelIds)));
         var scope = _selection.EffectiveScope();
         var models = scope.Sum(s => s.ModelIds.Count);
         var authorized = 0;
@@ -286,12 +266,17 @@ public sealed partial class IdentityInspectionViewModel
 
         _pendingCount = models - authorized;
         ScopeSummary = models == 0
-            ? "尚未选择任何模型：不会发送任何请求，开启和立即巡检也不会生效。请勾选配置并展开选择模型。"
+            ? (_selectionDirty ? "草稿范围为空。确认后不再安排下一轮。" : "还没有可巡检的模型。可在下方选择配置和模型。")
             : $"已选 {scope.Count} 个配置、{models} 个模型；已授权 {authorized} 个，待确认 {_pendingCount} 个。";
-        PendingText = _pendingCount > 0 ? "待确认的模型在你确认前不会被检测，已授权部分不受影响。" : "";
+        UpdatePendingText();
+        OnPropertyChanged(nameof(IntervalHint));
         OnPropertyChanged(nameof(CanConfirmScope));
         CommandManager.InvalidateRequerySuggested();
     }
+
+    private void UpdatePendingText() => PendingText = _snapshot?.NeedsUpgradeConfirmation == true
+        ? "旧授权已失效。请重新确认巡检设置，无需重新开关。"
+        : HasDraft ? "有未确认的更改，自动巡检仍使用已确认设置。" : _pendingCount > 0 ? "待确认目标不会参加巡检。" : "";
 
     // ---- 配置/模型缓存变化 ----
 

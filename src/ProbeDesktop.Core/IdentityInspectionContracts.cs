@@ -9,7 +9,10 @@ public sealed record IdentityInspectionSettings
     public bool Enabled { get; init; }
     public int IntervalMinutes { get; init; } = 30;
 }
-public sealed record IdentityInspectionConsent(IReadOnlyList<IdentityInspectionTarget> Scope, int IntervalMinutes, DateTimeOffset AcceptedAt);
+public sealed record IdentityInspectionConsent(IReadOnlyList<IdentityInspectionTarget> Scope, int IntervalMinutes, DateTimeOffset AcceptedAt)
+{
+    public Guid SettingsRevision { get; init; }
+}
 public sealed record IdentityInspectionTargetStatus(IdentityInspectionTarget Target, string ProfileName, bool Selected, bool Authorized, bool Paused);
 public enum IdentityInspectionTrigger { Manual, Automatic }
 public enum IdentityInspectionAttemptState { Pending, IntentPersisted, Submitted, Completed, Skipped, Unknown }
@@ -25,6 +28,7 @@ public sealed record IdentityInspectionRoundSummary
 {
     public IdentityInspectionTrigger Trigger { get; init; } = IdentityInspectionTrigger.Automatic;
     public DateTimeOffset? ManualConsentAt { get; init; }
+    public int? IntervalMinutes { get; init; }
     public Guid RoundId { get; init; } = Guid.NewGuid();
     public DateTimeOffset StartedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? CompletedAt { get; init; }
@@ -36,16 +40,26 @@ public sealed record IdentityInspectionRoundSummary
     public string? StopCode { get; init; }
     public IReadOnlyList<Guid> PausedProfileIds { get; init; } = [];
 }
-public sealed record IdentityInspectionSnapshot(IdentityInspectionSettings Settings, IReadOnlyList<IdentityInspectionSelection> Selections, IReadOnlyList<IdentityInspectionTargetStatus> Targets, IdentityInspectionRoundSummary? LatestRound);
+public sealed record IdentityInspectionSnapshot(IdentityInspectionSettings Settings, IReadOnlyList<IdentityInspectionSelection> Selections, IReadOnlyList<IdentityInspectionTargetStatus> Targets, IdentityInspectionRoundSummary? LatestRound)
+{
+    public Guid SettingsRevision { get; init; }
+    public DateTimeOffset? LastCompletedAt { get; init; }
+    public bool NeedsUpgradeConfirmation { get; init; }
+    public DateTimeOffset? RetryNotBefore { get; init; }
+}
 /// <summary>No GET is performed by this service. The host waits through its shared Probe coordinator before recording the persisted terminal result.</summary>
 public sealed record IdentityInspectionStep(IdentityInspectionRoundSummary Round, ProbeRecord? Probe, bool HasMore, bool WaitingForResult, string? Code = null);
 public interface IIdentityInspectionService
 {
     Task<IdentityInspectionSnapshot> GetIdentityInspectionSnapshotAsync(CancellationToken cancellationToken = default);
+    Task<IdentityInspectionSnapshot> ConfirmIdentityInspectionSettingsAsync(IReadOnlyList<IdentityInspectionSelection> selections, IdentityInspectionConsent consent, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
     Task<IdentityInspectionSnapshot> SaveIdentityInspectionSelectionsAsync(IReadOnlyList<IdentityInspectionSelection> selections, CancellationToken cancellationToken = default);
     Task<IdentityInspectionSnapshot> SaveIdentityInspectionSettingsAsync(IdentityInspectionSettings settings, IdentityInspectionConsent? consent = null, CancellationToken cancellationToken = default);
     Task<IdentityInspectionSnapshot> SaveIdentityInspectionIntervalAsync(int intervalMinutes, IdentityInspectionConsent? consent = null, CancellationToken cancellationToken = default);
     Task<IdentityInspectionRoundSummary> BeginIdentityInspectionRoundAsync(IdentityInspectionTrigger trigger = IdentityInspectionTrigger.Automatic, IdentityInspectionConsent? consent = null, CancellationToken cancellationToken = default);
+    Task<IdentityInspectionRoundSummary> BeginDueIdentityInspectionRoundAsync(CancellationToken cancellationToken = default) =>
+        BeginIdentityInspectionRoundAsync(cancellationToken: cancellationToken);
     // Claims at most one frozen target, persists intent, revalidates and uses the shared final POST gate. Never retries an intent.
     Task<IdentityInspectionStep> TrySubmitNextIdentityInspectionTargetAsync(Guid roundId, CancellationToken cancellationToken = default);
     // localPollingLimitReached stops this round without claiming the remote run has ended (host limit: ten minutes).

@@ -10,6 +10,7 @@ public interface IDialogService
 {
     /// <summary>是/否确认，默认按钮为“否”。仅返回 Yes 时为 true。</summary>
     bool Confirm(string title, string message, bool warning = true);
+    bool ConfirmInspectionSettings(string title, string message) => Confirm(title, message);
     void Info(string title, string message);
     void Error(string title, string message);
     void ShowException(string title, Exception ex);
@@ -47,7 +48,7 @@ public sealed class DialogService : IDialogService
         var owner = Owner;
         if (IsLongText(message))
         {
-            return ConfirmScrollable(owner, title, message);
+            return ConfirmScrollable(owner, title, message, "确认");
         }
 
         var icon = warning ? MessageBoxImage.Warning : MessageBoxImage.Question;
@@ -61,7 +62,9 @@ public sealed class DialogService : IDialogService
     /// 长文本确认窗：全文放在 ScrollViewer 内自动换行，不截断。默认且取消键均为“取消”，只有点“确认发送”才返回 true；
     /// 关闭窗口、Esc、Enter 默认都等于取消。窗口最大不超过工作区，内容多时出现滚动条。
     /// </summary>
-    private static bool ConfirmScrollable(Window? owner, string title, string message)
+    public bool ConfirmInspectionSettings(string title, string message) => ConfirmScrollable(Owner, title, message, "保存设置");
+
+    private static bool ConfirmScrollable(Window? owner, string title, string message, string confirmLabel)
     {
         var work = SystemParameters.WorkArea;
         var text = new TextBlock
@@ -86,7 +89,7 @@ public sealed class DialogService : IDialogService
             Margin = new Thickness(12, 12, 12, 0),
         };
 
-        var confirm = new Button { Content = "确认发送", MinWidth = 96, Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 8, 0) };
+        var confirm = new Button { Content = confirmLabel, MinWidth = 96, Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 8, 0) };
         var cancel = new Button { Content = "取消", MinWidth = 96, Padding = new Thickness(12, 4, 12, 4), IsCancel = true, IsDefault = true };
         var buttons = new StackPanel
         {

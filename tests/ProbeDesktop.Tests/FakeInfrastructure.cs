@@ -17,11 +17,14 @@ public sealed class RecordedRequest
 /// </summary>
 public sealed class FakeHttpHandler : HttpMessageHandler
 {
-    private readonly Queue<Func<HttpRequestMessage, HttpResponseMessage>> _responses = new();
+    private readonly Queue<Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>> _responses = new();
     public List<RecordedRequest> Requests { get; } = new();
     public int Count => Requests.Count;
 
     public FakeHttpHandler Enqueue(Func<HttpRequestMessage, HttpResponseMessage> responder)
+        => EnqueueAsync((request, _) => Task.FromResult(responder(request)));
+
+    public FakeHttpHandler EnqueueAsync(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder)
     {
         _responses.Enqueue(responder);
         return this;
@@ -78,7 +81,7 @@ public sealed class FakeHttpHandler : HttpMessageHandler
         if (_responses.Count == 0)
             throw new InvalidOperationException($"FakeHttpHandler has no scripted response for {request.Method} {request.RequestUri}");
 
-        return _responses.Dequeue()(request);
+        return await _responses.Dequeue()(request, cancellationToken).ConfigureAwait(false);
     }
 }
 
@@ -99,6 +102,28 @@ public sealed class ToggleFailProtector : ProbeDesktop.Core.ISecretProtector
     {
         if (FailUnprotect) throw new System.Security.Cryptography.CryptographicException("simulated unprotect failure");
         return _inner.Unprotect(ciphertext);
+    }
+}
+
+// Cancel on the read after the protected prewrite, while the final gate is reloading it.
+internal sealed class CancelBeforeDispatchProtector(CancellationTokenSource cancellation, string history, string marker, string value) : ProbeDesktop.Core.ISecretProtector
+{
+    private readonly ReversibleTestProtector _inner = new();
+    private bool _fired;
+    public byte[] Protect(byte[] plaintext) => _inner.Protect(plaintext);
+    public byte[] Unprotect(byte[] ciphertext)
+    {
+        byte[] plaintext = _inner.Unprotect(ciphertext);
+        if (!_fired)
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(plaintext);
+            if (json.RootElement.GetProperty(history).EnumerateArray().Any(r => r.TryGetProperty(marker, out var field) && field.GetString() == value))
+            {
+                _fired = true;
+                cancellation.Cancel();
+            }
+        }
+        return plaintext;
     }
 }
 

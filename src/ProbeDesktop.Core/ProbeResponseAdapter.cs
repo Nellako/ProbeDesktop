@@ -11,6 +11,8 @@ internal static class ProbeResponseAdapter
           "spoof_behavior_induced", "spoof_selfclaim_forged", "ambiguous", "insufficient_data" };
     private static readonly HashSet<string> ItemStatuses = new(StringComparer.Ordinal) { "pending", "running", "done", "error" };
 
+    internal static bool IsKnownVerdictStatus(string value) => VerdictStatuses.Contains(value);
+
     internal static string? AcknowledgedId(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object) return null;

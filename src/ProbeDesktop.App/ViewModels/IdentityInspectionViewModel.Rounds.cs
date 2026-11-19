@@ -5,10 +5,11 @@ namespace ProbeDesktop.App.ViewModels;
 
 public sealed partial class IdentityInspectionViewModel
 {
-    private void StartScheduler(bool immediate)
+    private void RefreshSchedule()
     {
-        _scheduler.TrySetInterval(_savedInterval);
-        _scheduler.Start(immediate);
+        if (!_loaded || _disposed || _snapshot is not { } snap) return;
+        _scheduler.UpdateSchedule(snap.Settings.IntervalMinutes, snap.LastCompletedAt,
+            Enabled && AuthorizedSelectedCount(snap) > 0, _busy || _manualPromptOpen || _runs.Records.Any(r => r.IsActive), snap.RetryNotBefore);
         OnPropertyChanged(nameof(StateText));
         OnPropertyChanged(nameof(NextStartText));
     }
@@ -44,6 +45,7 @@ public sealed partial class IdentityInspectionViewModel
         }
 
         IsBusy = true;
+        RefreshSchedule();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
         _roundCts = linked;
         var token = linked.Token;
@@ -54,7 +56,9 @@ public sealed partial class IdentityInspectionViewModel
         var keepGoing = true;
         try
         {
-            round = await _service!.BeginIdentityInspectionRoundAsync(trigger, consent, token);
+            round = trigger == IdentityInspectionTrigger.Automatic
+                ? await _service!.BeginDueIdentityInspectionRoundAsync(token)
+                : await _service!.BeginIdentityInspectionRoundAsync(trigger, consent, token);
             _stopRoundId = null;
             _stopNote = "";
             _round = round;
@@ -164,8 +168,10 @@ public sealed partial class IdentityInspectionViewModel
             }
 
             _roundCts = null;
+            if (!_disposed && !_lifetime.IsCancellationRequested) await FetchAsync(allowPrune: false);
             _runGate.Release();
             IsBusy = false;
+            RefreshSchedule();
         }
 
         var kind = IdentityInspectionText.Kind(trigger);
@@ -188,7 +194,6 @@ public sealed partial class IdentityInspectionViewModel
         {
             // 只读恢复：对本轮产生的、尚未启动自动查询且有远端标识的记录启动 GET 查询，绝不重新提交。
             _runs.ResumeAutomaticRecords();
-            _ = FetchAsync(allowPrune: true);
         }
 
         if (!keepGoing && !_disposed)
@@ -214,6 +219,7 @@ public sealed partial class IdentityInspectionViewModel
 
         SyncRows();
         OnPropertyChanged(nameof(RoundCountsText));
+        RefreshSchedule();
     }
 
     /// <summary>最新一轮各目标行：就地更新，保持键盘焦点。状态以对应鉴别记录为准。</summary>

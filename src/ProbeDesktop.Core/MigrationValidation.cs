@@ -100,7 +100,16 @@ internal static class MigrationValidation
             seen.Remove("contextCheck");
             seen.Remove("promptVersion");
         }
-        if (requireAll && !seen.SetEquals(properties.Keys)) throw new JsonException();
+        // Additive fields in existing schema 3: accept old absence, but still validate every
+        // present value above. No version/revision means a legacy grant cannot be used.
+        string[] additive = type == typeof(Vault) ?
+        ["lastInspectionCompletedAt", "inspectionSettingsVersion", "inspectionSettingsRevision", "inspectionUpgradePending",
+         "lastIdentityInspectionCompletedAt", "identityInspectionSettingsVersion", "identityInspectionSettingsRevision", "identityInspectionUpgradePending"] :
+            type == typeof(InspectionSettings) ? ["maxRetries"] :
+            type == typeof(InspectionGrant) ? ["maxAttempts"] :
+            type == typeof(InspectionRoundSummary) ? ["intervalMinutes", "maxRetries"] :
+            type == typeof(IdentityInspectionRoundSummary) ? ["intervalMinutes"] : [];
+        if (requireAll && properties.Keys.Any(p => !seen.Contains(p) && !additive.Contains(p, StringComparer.Ordinal))) throw new JsonException();
     }
 
     private static void Unique<T>(IEnumerable<T> values)
@@ -123,7 +132,9 @@ internal static class MigrationValidation
     {
         Vault v = p.Vault;
         if (p.Profiles.Count > 1000 || v.InspectionSettings.IntervalMinutes is < 10 or > 480 ||
-            v.IdentityInspectionSettings.IntervalMinutes is < 10 or > 480) throw new JsonException();
+            v.IdentityInspectionSettings.IntervalMinutes is < 10 or > 480 || v.InspectionSettings.MaxRetries is < 0 or > 2 ||
+            v.InspectionSettingsVersion is not (0 or 1) || v.IdentityInspectionSettingsVersion is not (0 or 1) ||
+            v.LastInspectionCompletedAt > DateTimeOffset.MaxValue.AddMinutes(-480) || v.LastIdentityInspectionCompletedAt > DateTimeOffset.MaxValue.AddMinutes(-480)) throw new JsonException();
         SensitiveText exactSecrets = new(v.KnownSecrets.Concat(v.Secrets.Values.Select(s => s.Key)));
         void SafeIdentifier(string? text)
         {
@@ -181,7 +192,7 @@ internal static class MigrationValidation
         foreach (var s in v.IdentityInspectionSelections) Selection(s.ProfileId, s.SelectedModelIds, p.Profiles);
         foreach (var g in v.InspectionGrants)
         {
-            if (g.IntervalMinutes is < 10 or > 480 || g.MaxAttempts is not (1 or 3)) throw new JsonException();
+            if (g.IntervalMinutes is < 10 or > 480 || g.MaxAttempts is < 1 or > 3) throw new JsonException();
             Id(g.Target.ProfileId); if (g.Target.KeyRevision < 1) throw new JsonException();
             Unique(g.Target.Models); foreach (string m in g.Target.Models) Target(g.Target.ProfileId, g.Target.KeyRevision, g.Target.BaseUrl, m);
         }

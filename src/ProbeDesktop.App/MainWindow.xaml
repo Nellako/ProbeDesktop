@@ -5,6 +5,7 @@
         xmlns:themes="clr-namespace:ProbeDesktop.App.Themes"
         xmlns:conv="clr-namespace:ProbeDesktop.App.Converters"
         Title="中转模型检测（BazaarLink Probe 非官方客户端）"
+        Icon="pack://application:,,,/Assets/ProbeDesktop.ico"
         Width="1360" Height="900" MinWidth="1100" MinHeight="780"
         WindowStartupLocation="CenterScreen"
         FontFamily="{StaticResource UiFont}" FontSize="13" FontWeight="Normal"

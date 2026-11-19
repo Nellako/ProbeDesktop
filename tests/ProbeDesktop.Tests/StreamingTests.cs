@@ -111,9 +111,7 @@ public static class StreamingTests
         {
             RelayProfile p = await service.SaveProfileAsync(Fixtures.NewProfile(), Program.Key1);
             await service.RefreshModelsAsync(p.Id, new(p.Id, p.KeyRevision, p.BaseUrl, OutboundPurpose.ModelList, ModelApiEndpoints.Models(p.BaseUrl, p.Protocol), null, DateTimeOffset.UtcNow));
-            InspectionSnapshot snapshot = await service.GetInspectionSnapshotAsync();
-            snapshot = await service.SaveInspectionSelectionsAsync([new(p.Id, true, ["a", "b", "c", "d"])]);
-            await service.SaveInspectionSettingsAsync(new() { Enabled = false }, new(snapshot.Targets.Select(t => t.Target).ToArray(), 30, DateTimeOffset.UtcNow) { MaxAttempts = 3 });
+            await Fixtures.ConfirmInspectionAsync(service, [new(p.Id, true, ["a", "b", "c", "d"])]);
             h.EnqueueRaw(HttpStatusCode.OK, "text/event-stream", Delta + Done);
             for (int i = 0; i < 3; i++) h.EnqueueJson(HttpStatusCode.OK, "{}");
             for (int i = 0; i < 3; i++) h.EnqueueJson(HttpStatusCode.OK, "{\"error\":{}}");
