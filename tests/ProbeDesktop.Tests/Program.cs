@@ -160,6 +160,7 @@ public static class Program
             ("S04", "App overdue in-flight deadline never overlaps or queues a second round", AppSchedulerTests.S04_OverdueSaveCoalescesOnce),
             ("S05", "App explicit stop cancels round but invalid save does not", AppSchedulerTests.S05_StopCancelsButInvalidSaveDoesNot),
             ("S06", "App fake-clock restart, eligibility, busy and host cooldown", AppSchedulerTests.S06_RestartHostCooldownAndEligibility),
+            ("S07", "App no-op backs off after host cooldown expires and preserves future cooldown", AppSchedulerTests.S07_NoOpBacksOffWhenHostCooldownExpires),
             ("R02", "Interval save with fresh consent leaves in-flight round intact", SelectionRequirementTests.R02_IntervalSaveKeepsInflightRound),
             ("R04", "Off-state scope confirm stores grants without enabling or sending", SelectionRequirementTests.R04_OffStateScopeConfirmGrantsWithoutEnabling),
             ("R05", "Same-interval scope confirm keeps in-flight round intact", SelectionRequirementTests.R05_SameIntervalConfirmKeepsInflightRound),

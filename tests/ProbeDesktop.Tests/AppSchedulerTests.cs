@@ -123,6 +123,44 @@ public static class AppSchedulerTests
         Check.Equal(1, count, "stop leaves no pending round");
     }
 
+    public static async Task S07_NoOpBacksOffWhenHostCooldownExpires()
+    {
+        foreach (int minutesUntilDispatch in new[] { 4, 5 })
+        {
+            var clock = new ManualClock();
+            int count = 0;
+            DateTimeOffset persistedCompletion = clock.Origin.AddMinutes(-18);
+            DateTimeOffset hostDeadline = clock.Origin.AddMinutes(4);
+            InspectionScheduler scheduler = null!;
+            using var lifetime = scheduler = new InspectionScheduler(_ =>
+            {
+                int invocation = Interlocked.Increment(ref count);
+                if (invocation == 2)
+                    scheduler.UpdateSchedule(10, persistedCompletion, eligible: true, retryNotBefore: clock.GetUtcNow().AddSeconds(30));
+                else if (invocation == 3)
+                    scheduler.UpdateSchedule(10, clock.GetUtcNow(), eligible: true);
+                return Task.FromResult(invocation <= 3);
+            }, clock);
+
+            scheduler.UpdateSchedule(10, persistedCompletion, eligible: true, retryNotBefore: hostDeadline);
+            clock.Advance(minutesUntilDispatch);
+            DateTimeOffset backoff = clock.GetUtcNow().AddMinutes(1);
+            await Until(() => scheduler.NextStartAt == backoff || Volatile.Read(ref count) > 1);
+            Check.Equal(backoff, scheduler.NextStartAt, "a no-op backs off for one minute when cooldown has expired or is due now");
+            Check.Equal(1, count, "the overdue slot does not dispatch twice before backoff");
+
+            clock.Advance(1);
+            DateTimeOffset newCooldown = clock.GetUtcNow().AddSeconds(30);
+            await Until(() => scheduler.NextStartAt == newCooldown);
+            Check.Equal(2, count, "a future cooldown controls the next attempt without adding a minute");
+
+            clock.Advance(1);
+            DateTimeOffset normalDue = clock.GetUtcNow().AddMinutes(10);
+            await Until(() => scheduler.NextStartAt == normalDue);
+            Check.Equal(3, count, "a completed round resumes the normal interval from completion");
+        }
+    }
+
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(3);

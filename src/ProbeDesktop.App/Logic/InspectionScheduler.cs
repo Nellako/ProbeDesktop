@@ -111,9 +111,13 @@ public sealed class InspectionScheduler(Func<CancellationToken, Task<bool>> runR
                 {
                     _active = null;
                     // A no-op (e.g. all endpoints limited) is not a completed round. Keep its
-                    // persisted baseline while avoiding a tight loop on the same overdue slot.
-                    if (!active.IsCancellationRequested && _ended == startedFrom && _retryNotBefore is null)
-                        _backoff = _time.GetUtcNow().AddMinutes(1);
+                    // persisted baseline and back off unless a future host cooldown already gates dispatch.
+                    if (!active.IsCancellationRequested && _ended == startedFrom)
+                    {
+                        var now = _time.GetUtcNow();
+                        if (_retryNotBefore is null || _retryNotBefore <= now)
+                            _backoff = now.AddMinutes(1);
+                    }
                 }
                 active.Dispose();
                 Plan();

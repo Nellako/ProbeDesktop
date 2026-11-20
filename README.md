@@ -1,6 +1,6 @@
 # Probe Desktop
 
-非官方 Windows 桌面客户端。管理 AI API 中转站配置和模型，直连测试，或通过 BazaarLink Probe 手动鉴别和定期巡检。当前源码版本 **0.9.4**。先读 [中文使用手册](使用手册.md) 或 [安全说明](SAFETY.md)。
+非官方 Windows 桌面客户端。管理 AI API 中转站配置和模型，直连测试，或通过 BazaarLink Probe 手动鉴别和定期巡检。当前源码版本为 **0.9.5**。先读 [中文使用手册](使用手册.md) 或 [安全说明](SAFETY.md)。
 
 Windows x64 自包含单文件见 [GitHub Releases](https://github.com/Nellako/ProbeDesktop/releases)。下载 `ProbeDesktop.exe` 后直接运行，不必安装 .NET。程序未签名；请核对来源和 SHA-256，不要关闭安全保护。主要在 Windows 11 x64 验证。
 
@@ -23,6 +23,6 @@ Windows x64 自包含单文件见 [GitHub Releases](https://github.com/Nellako/P
 .\build.ps1 -Task publish -SingleFile
 ```
 
-发布脚本只生成本地文件，不会上传。程序集和文件版本为 `0.9.4.0`。回归使用假 HTTP 和隔离目录，不代表真实中转站、线上计费或长周期巡检已验证。
+发布脚本只生成本地文件，不会上传。产品、文件与程序集版本由根目录 `Directory.Build.props` 定义。回归使用假 HTTP 和隔离目录，不代表真实中转站、线上计费、实测费用或长周期巡检已验证。
 
 [版本说明](RELEASE-NOTES.md) · [Probe API](https://bazaarlink.ai/probe-api-skill.md) · [官方判定方法](https://bazaarlink.ai/zh-CN/probe?tab=learn)

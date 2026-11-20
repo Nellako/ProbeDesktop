@@ -9,10 +9,10 @@
       InformationalVersion 与发布版本一致，不自动附加 Git 提交号或工作区状态。
       需要追溯构建来源时，在发布记录中单独写明，而不是嵌入程序集元数据。
     -->
-    <Version>0.9.4</Version>
-    <AssemblyVersion>0.9.4.0</AssemblyVersion>
-    <FileVersion>0.9.4.0</FileVersion>
-    <InformationalVersion>0.9.4</InformationalVersion>
+    <Version>0.9.5</Version>
+    <AssemblyVersion>0.9.5.0</AssemblyVersion>
+    <FileVersion>0.9.5.0</FileVersion>
+    <InformationalVersion>0.9.5</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 </Project>
